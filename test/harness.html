@@ -49,6 +49,13 @@
       </div>
 
       <button class="css-btn-dd44" data-testid="submit-btn" type="button">提交</button>
+
+      <!-- 真实站点里按钮内部常嵌几层 span（图标 + 文字），点击的事件 target 是最深那个。
+           录制器应当上溯到这个带 aria-label 的按钮，而不是记 span 的多层结构路径。 -->
+      <button class="css-btn-ee66" aria-label="收藏此项" type="button">
+        <span class="css-icon-w1"><span class="css-icon-w2">★</span></span>
+        <span class="css-label-w1"><span class="css-label-w2">收藏</span></span>
+      </button>
     </form>
 
     <h3>提交结果</h3>

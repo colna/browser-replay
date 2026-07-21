@@ -285,6 +285,10 @@ button:active {
   font-size: 10px;
   color: var(--fg-dim);
 }
+.step-score.warn {
+  color: #ff9f0a;
+  font-weight: 600;
+}
 .step-del {
   flex: none;
   align-self: flex-start;

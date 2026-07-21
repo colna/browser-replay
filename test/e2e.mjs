@@ -221,6 +221,9 @@ async function main() {
     // 点一下 SPA 风格的导航容器（带 tabindex，会真的拿到焦点）
     await realClick(cdp, sessionId, '.css-navwrap-2k3l');
 
+    // 点按钮内部最深的那层 span —— 事件 target 是 span，但意图是点按钮
+    await realClick(cdp, sessionId, '.css-label-w2');
+
     await realClick(cdp, sessionId, '#remark');
     await realType(cdp, sessionId, '端到端验证');
     await realClick(cdp, sessionId, '[data-testid="submit-btn"]');
@@ -257,6 +260,14 @@ async function main() {
       focusTags.every((tag) => ['input', 'textarea', 'select'].includes(tag)),
       `聚焦步骤的目标标签：${[...new Set(focusTags)].join(', ')}`
     );
+    // 点按钮里的 span，应当录成「点这个按钮」而不是 span 的多层结构路径
+    const favStep = steps.find((s) => s.target && s.target.hints && /收藏/.test(s.target.hints.text || ''));
+    check(
+      '点按钮内嵌 span 时上溯到按钮本身',
+      favStep && favStep.target.tag === 'button' && favStep.target.candidates[0].value === 'button[aria-label="收藏此项"]',
+      favStep ? `${favStep.target.tag} → ${favStep.target.candidates[0].value}` : '(没找到该步骤)'
+    );
+
     // 结构路径应当从最近的地标 / 锚点起算，而不是从 html > body 一路铺下来
     const paths = steps
       .map((s) => s.target && s.target.candidates[0].value)

@@ -191,8 +191,17 @@ function renderSteps(script) {
       <button class="step-del" title="删除该步">✕</button>
     `;
     li.querySelector('.step-type').textContent = TYPE_LABEL[step.type] || step.type;
-    li.querySelector('.step-score').textContent = best ? ` ${best.kind} · ${best.score}` : '';
     li.querySelector('.step-sel').textContent = selector;
+
+    // 让用户能一眼看出哪几步是靠结构路径吊着的 —— 那些就是改版后最先坏掉的步骤
+    const scoreEl = li.querySelector('.step-score');
+    if (best) {
+      const fragile = best.score < 60;
+      scoreEl.textContent = ` ${best.kind} · ${best.score}${fragile ? ' ⚠ 易失效' : ''}`;
+      scoreEl.classList.toggle('warn', fragile);
+    } else {
+      scoreEl.textContent = '';
+    }
 
     const valueEl = li.querySelector('.step-val');
     if (step.masked) {

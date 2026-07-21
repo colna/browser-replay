@@ -120,6 +120,49 @@
     flushPendingInput();
   }
 
+  const INTERACTIVE_SELECTOR = [
+    'a[href]',
+    'button',
+    'input',
+    'select',
+    'textarea',
+    'label',
+    'summary',
+    'option',
+    '[role="button"]',
+    '[role="link"]',
+    '[role="menuitem"]',
+    '[role="tab"]',
+    '[role="option"]',
+    '[role="checkbox"]',
+    '[role="radio"]',
+    '[role="switch"]'
+  ].join(',');
+
+  /**
+   * 点击的事件 target 是最深的那个节点 —— 点一个按钮，target 往往是按钮里的
+   * `<span><span>文字</span></span>`。这些包裹层没有任何标识，只能退到
+   * `nav > div > … > span > span > span` 这种十来层的结构路径，任何一层多个包装 div
+   * 就全废；而它外面那个按钮多半带着 aria-label 或 data-testid。
+   *
+   * 所以：目标自身已经有稳定标识时就用它自己；只有当它只能退到结构路径时，
+   * 才向上找最近的可交互祖先，且**必须确实更好认**才换 —— 这是择优，不是无脑上溯。
+   * 只上溯到可交互元素（按钮 / 链接 / role=button）而不是布局容器，
+   * 因为回放点击取的是元素中心点，容器太大时中心可能落在别的子元素上。
+   */
+  function describeClickTarget(el) {
+    const direct = SELECTOR.describe(el);
+    const directScore = direct.candidates[0] ? direct.candidates[0].score : 0;
+    if (directScore >= 60) return direct;
+
+    const interactive = el.closest && el.closest(INTERACTIVE_SELECTOR);
+    if (!interactive || interactive === el) return direct;
+
+    const alt = SELECTOR.describe(interactive);
+    const altScore = alt.candidates[0] ? alt.candidates[0].score : 0;
+    return altScore > directScore ? alt : direct;
+  }
+
   function onClick(event) {
     const el = event.target;
     if (!el || isOwnUI(el)) return;
@@ -127,7 +170,7 @@
     if (el.type === 'checkbox' || el.type === 'radio') return;
 
     flushPendingInput();
-    emit({ type: 'click', target: SELECTOR.describe(el), sinceLastMs: sinceLast() });
+    emit({ type: 'click', target: describeClickTarget(el), sinceLastMs: sinceLast() });
   }
 
   /**
