@@ -1,0 +1,45 @@
+{
+  "manifest_version": 3,
+  "name": "Browser Replay",
+  "version": "0.1.0",
+  "description": "录制浏览器操作（点击 / 输入 / 聚焦等）并回放，可导出 JSON。选择器不使用 class。",
+  "permissions": [
+    "storage",
+    "scripting",
+    "tabs",
+    "webNavigation",
+    "unlimitedStorage"
+  ],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "all_frames": true,
+      "run_at": "document_start",
+      "js": [
+        "src/lib/selector.js",
+        "src/lib/waiter.js",
+        "src/lib/executor.js",
+        "src/content.js"
+      ]
+    }
+  ],
+  "action": {
+    "default_popup": "src/popup/popup.html",
+    "default_title": "Browser Replay",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

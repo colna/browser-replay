@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>selector 自测</title>
+  </head>
+  <body>
+    <!-- 各种真实站点里常见的形态，重点是「到处都是 class，且 class 全是构建产物」 -->
+    <div class="css-1a2b3c wrapper" id="app">
+      <header class="css-9z8y7x">
+        <button class="btn btn-primary css-abc123" data-testid="save-btn">保存</button>
+        <button class="btn btn-ghost css-abc123">取消</button>
+      </header>
+
+      <form class="form-x1y2" id="login-form">
+        <label class="lbl" for="username">用户名</label>
+        <input class="input css-in-1" id="username" name="username" type="text" placeholder="请输入用户名" />
+
+        <label class="lbl" for=":r7:">动态 id 字段</label>
+        <input class="input css-in-2" id=":r7:" name="dynamic_field" type="text" />
+
+        <input class="input css-in-3" id="a1b2c3d4e5f6" name="hashed_id_field" type="text" />
+
+        <select class="sel css-sel" name="country">
+          <option value="cn">中国</option>
+          <option value="us">美国</option>
+        </select>
+
+        <input class="chk" type="checkbox" name="agree" />
+        <button class="submit css-sub" type="submit">提交</button>
+      </form>
+
+      <ul class="list css-list">
+        <li class="item css-item">第一项</li>
+        <li class="item css-item">第二项</li>
+        <li class="item css-item"><span class="deep css-deep">深层无标识节点</span></li>
+      </ul>
+    </div>
+
+    <div id="shadow-host"></div>
+
+    <pre id="result">running…</pre>
+
+    <script src="../src/lib/selector.js"></script>
+    <script>
+      const host = document.getElementById('shadow-host');
+      const shadow = host.attachShadow({ mode: 'open' });
+      shadow.innerHTML = '<div class="sd-wrap css-sd"><button class="sd-btn css-sd2" data-testid="shadow-btn">影子按钮</button></div>';
+
+      const S = window.__BR_SELECTOR__;
+      const results = [];
+      const check = (name, fn) => {
+        try {
+          const detail = fn();
+          results.push(`PASS  ${name}${detail ? '  —  ' + detail : ''}`);
+        } catch (error) {
+          results.push(`FAIL  ${name}  —  ${error.message}`);
+        }
+      };
+      const assert = (cond, msg) => {
+        if (!cond) throw new Error(msg);
+      };
+
+      const CLASS_PATTERN = /(^|[^\\])\.[A-Za-z_-]|\[class/;
+
+      function allCandidates(el) {
+        return S.describe(el).candidates;
+      }
+
+      // 1. 没有任何一个候选带 class —— 这是本项目的硬约束
+      check('全库无 class 选择器', () => {
+        const nodes = document.querySelectorAll('*');
+        let checked = 0;
+        for (const el of nodes) {
+          if (el.tagName === 'SCRIPT' || el.tagName === 'PRE') continue;
+          for (const c of allCandidates(el)) {
+            assert(!CLASS_PATTERN.test(c.value), `${el.tagName} 生成了 class 选择器：${c.value}`);
+          }
+          checked += 1;
+        }
+        return `扫描 ${checked} 个元素`;
+      });
+
+      // 2. data-testid 优先
+      check('data-testid 排首位', () => {
+        const el = document.querySelector('[data-testid="save-btn"]');
+        const first = allCandidates(el)[0];
+        assert(first.kind === 'testAttr', `首位是 ${first.kind}:${first.value}`);
+        return first.value;
+      });
+
+      // 3. 稳定 id 被采用
+      check('稳定 id 被采用', () => {
+        const el = document.getElementById('username');
+        const kinds = allCandidates(el).map((c) => c.value);
+        assert(kinds.includes('#username'), `候选：${kinds.join(' | ')}`);
+        return kinds.slice(0, 2).join(' | ');
+      });
+
+      // 4. React useId / hash id 被判为不稳定
+      check('动态 id 不被采用', () => {
+        assert(S.isUnstableId(':r7:'), ':r7: 应判为不稳定');
+        assert(S.isUnstableId('a1b2c3d4e5f6'), 'hash id 应判为不稳定');
+        // 注意：结构路径可以拿祖先的稳定 id 当锚点（`#login-form > input:nth-of-type(2)`），
+        // 这是允许的；要禁的只是「拿元素自己的动态 id 定位」，即 kind === 'id' 的候选。
+        for (const name of ['dynamic_field', 'hashed_id_field']) {
+          const el = document.querySelector(`[name="${name}"]`);
+          const candidates = allCandidates(el);
+          assert(
+            !candidates.some((c) => c.kind === 'id'),
+            `${name} 不该出现自身 id 候选：${candidates.map((c) => c.value).join(' | ')}`
+          );
+        }
+        return '两个动态 id 字段均已降级到 name / 结构路径';
+      });
+
+      // 5. 无任何标识的深层节点退到 nth-of-type 结构路径
+      check('无标识节点退到 nth-of-type', () => {
+        const el = document.querySelector('.deep');
+        const first = allCandidates(el)[0];
+        assert(first.kind === 'structural', `实际是 ${first.kind}`);
+        assert(first.value.includes('nth-of-type'), `路径未用 nth-of-type：${first.value}`);
+        return first.value;
+      });
+
+      // 6. 每个候选都必须唯一命中
+      check('候选全部唯一命中', () => {
+        const targets = ['[data-testid="save-btn"]', '#username', '.deep', 'select', '[type="checkbox"]'];
+        let total = 0;
+        for (const sel of targets) {
+          const el = document.querySelector(sel);
+          for (const c of allCandidates(el)) {
+            const hit = document.querySelectorAll(c.value);
+            assert(hit.length === 1 && hit[0] === el, `${c.value} 命中 ${hit.length} 个`);
+            total += 1;
+          }
+        }
+        return `${total} 个候选全部唯一`;
+      });
+
+      // 7. describe → resolve 往返
+      check('describe/resolve 往返一致', () => {
+        const targets = Array.from(document.querySelectorAll('button, input, select, li, span.deep'));
+        for (const el of targets) {
+          const desc = S.describe(el);
+          const { element } = S.resolve(desc);
+          assert(element === el, `${el.tagName}${el.name ? '[' + el.name + ']' : ''} 未能解析回原元素`);
+        }
+        return `${targets.length} 个元素往返成功`;
+      });
+
+      // 8. shadow DOM 穿透
+      check('shadow DOM 定位', () => {
+        const el = shadow.querySelector('[data-testid="shadow-btn"]');
+        const desc = S.describe(el);
+        assert(desc.shadowPath.length === 1, `shadowPath = ${JSON.stringify(desc.shadowPath)}`);
+        const { element } = S.resolve(desc);
+        assert(element === el, '未能穿透 shadow DOM 解析');
+        return `host: ${desc.shadowPath[0]}`;
+      });
+
+      // 9. 第二个同类元素靠结构区分而非 class
+      check('同类兄弟靠结构区分', () => {
+        const second = document.querySelectorAll('li')[1];
+        const desc = S.describe(second);
+        const { element } = S.resolve(desc);
+        assert(element === second, '第二个 li 解析错位');
+        return desc.candidates[0].value;
+      });
+
+      const failed = results.filter((r) => r.startsWith('FAIL')).length;
+      document.getElementById('result').textContent =
+        results.join('\n') + `\n\n===== ${results.length - failed} passed, ${failed} failed =====`;
+    </script>
+  </body>
+</html>

@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>录制/回放 harness</title>
+    <style>
+      body { font: 14px/1.6 -apple-system, sans-serif; padding: 32px; max-width: 520px; }
+      .css-field-9a8b { margin-bottom: 14px; }
+      label { display: block; margin-bottom: 4px; }
+      input[type='text'], select { width: 100%; padding: 8px; }
+      button { padding: 8px 18px; }
+      #summary { font-family: ui-monospace, Menlo, monospace; padding: 8px; background: #f3f3f5; }
+    </style>
+  </head>
+  <body>
+    <h1>录制 / 回放 harness</h1>
+
+    <!-- 结构与真实站点对齐：class 全是构建产物、id 有动态的、按钮带 data-testid -->
+    <form class="css-form-1x2y" id="demo-form" onsubmit="return false">
+      <div class="css-field-9a8b">
+        <label for="nickname">昵称</label>
+        <input class="css-input-aa11" id="nickname" name="nickname" type="text" placeholder="请输入昵称" />
+      </div>
+
+      <div class="css-field-9a8b">
+        <label for=":r3:">城市（动态 id）</label>
+        <select class="css-select-bb22" id=":r3:" name="city">
+          <option value="">请选择</option>
+          <option value="beijing">北京</option>
+          <option value="shanghai">上海</option>
+        </select>
+      </div>
+
+      <div class="css-field-9a8b">
+        <label><input class="css-check-cc33" type="checkbox" name="agree" value="yes" /> 我已阅读并同意</label>
+      </div>
+
+      <div class="css-field-9a8b">
+        <label for="remark">备注</label>
+        <input class="css-input-ee55" id="remark" name="remark" type="text" />
+      </div>
+
+      <button class="css-btn-dd44" data-testid="submit-btn" type="button">提交</button>
+    </form>
+
+    <h3>提交结果</h3>
+    <p id="summary">-</p>
+
+    <script>
+      // ---- chrome API 桩：让未经改动的 content.js 能原样跑在普通页面里 ----
+      const collectedSteps = [];
+      const messageListeners = [];
+
+      window.chrome = {
+        runtime: {
+          sendMessage(message) {
+            if (message && message.type === 'BR_STEP') collectedSteps.push(message.step);
+            return Promise.resolve({ ok: true });
+          },
+          onMessage: {
+            addListener(fn) {
+              messageListeners.push(fn);
+            }
+          }
+        }
+      };
+
+      function dispatchToContent(message) {
+        return new Promise((resolve) => {
+          let responded = false;
+          const respond = (value) => {
+            if (responded) return;
+            responded = true;
+            resolve(value);
+          };
+          for (const fn of messageListeners) {
+            const async = fn(message, {}, respond);
+            if (async !== true && responded) return;
+          }
+          setTimeout(() => respond({ ok: false, error: 'harness: 无响应' }), 20000);
+        });
+      }
+
+      // 提交按钮：不跳页，把当前表单值写进 #summary，方便断言「回放后状态 == 录制时状态」
+      document.querySelector('[data-testid="submit-btn"]').addEventListener('click', () => {
+        const form = document.getElementById('demo-form');
+        document.getElementById('summary').textContent =
+          `nickname=${form.nickname.value};city=${form.city.value};agree=${form.agree.checked};remark=${form.remark.value}`;
+      });
+
+      function resetForm() {
+        const form = document.getElementById('demo-form');
+        form.reset();
+        document.getElementById('summary').textContent = '-';
+        if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+      }
+
+      window.__harness = {
+        startRecord: () => dispatchToContent({ type: 'BR_START_RECORD' }),
+        stopRecord: async () => {
+          await dispatchToContent({ type: 'BR_STOP_RECORD' });
+          return collectedSteps.slice();
+        },
+        steps: () => collectedSteps.slice(),
+        reset: resetForm,
+        summary: () => document.getElementById('summary').textContent,
+        async replay(steps) {
+          const log = [];
+          for (let i = 0; i < steps.length; i += 1) {
+            const result = await dispatchToContent({
+              type: 'BR_EXEC_STEP',
+              step: steps[i],
+              index: i,
+              total: steps.length
+            });
+            log.push({ index: i, type: steps[i].type, ...result });
+            if (!result.ok) break;
+          }
+          return log;
+        }
+      };
+    </script>
+
+    <script src="../src/lib/selector.js"></script>
+    <script src="../src/lib/waiter.js"></script>
+    <script src="../src/lib/executor.js"></script>
+    <script src="../src/content.js"></script>
+  </body>
+</html>

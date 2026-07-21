@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>Browser Replay</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="header">
+      <div class="brand">
+        <span class="brand-dot" id="statusDot"></span>
+        <div>
+          <h1>Browser Replay</h1>
+          <p class="status" id="statusText">就绪</p>
+        </div>
+      </div>
+      <button class="ghost" id="importBtn" title="导入 JSON">导入</button>
+      <input type="file" id="importFile" accept="application/json" hidden />
+    </header>
+
+    <section class="control">
+      <button class="primary" id="recordBtn">开始录制</button>
+      <button class="danger" id="stopReplayBtn" hidden>停止回放</button>
+    </section>
+
+    <section class="progress" id="progressBox" hidden>
+      <div class="progress-head">
+        <span id="progressLabel">回放中</span>
+        <span id="progressCount">0 / 0</span>
+      </div>
+      <div class="bar"><div class="bar-fill" id="progressFill"></div></div>
+      <p class="error" id="progressError" hidden></p>
+    </section>
+
+    <main id="listView">
+      <p class="empty" id="emptyHint">还没有录制脚本。点「开始录制」，在页面上操作，再回来点停止。</p>
+      <ul class="scripts" id="scriptList"></ul>
+    </main>
+
+    <main id="detailView" hidden>
+      <div class="detail-head">
+        <button class="ghost" id="backBtn">← 返回</button>
+        <span id="detailName"></span>
+      </div>
+      <div class="detail-actions">
+        <button class="ghost" id="copyJsonBtn">复制 JSON</button>
+        <button class="ghost" id="downloadJsonBtn">下载 JSON</button>
+      </div>
+      <ol class="steps" id="stepList"></ol>
+    </main>
+
+    <div class="toast" id="toast" hidden></div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
