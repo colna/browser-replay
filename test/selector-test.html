@@ -37,6 +37,11 @@
       </ul>
     </div>
 
+    <!-- 地标标签应当成为结构路径的起点，而不是从 html > body 一路铺下来 -->
+    <nav class="css-nav-1">
+      <div class="css-navwrap"><div class="css-navinner">导航容器</div></div>
+    </nav>
+
     <div id="shadow-host"></div>
 
     <pre id="result">running…</pre>
@@ -166,6 +171,35 @@
         const { element } = S.resolve(desc);
         assert(element === second, '第二个 li 解析错位');
         return desc.candidates[0].value;
+      });
+
+      // 10. 地标标签当路径起点，别从 html/body 铺
+      check('结构路径从地标标签起算', () => {
+        const el = document.querySelector('.css-navinner');
+        const first = allCandidates(el)[0];
+        assert(first.kind === 'structural', `实际是 ${first.kind}`);
+        assert(first.value.startsWith('nav'), `路径未从 nav 起算：${first.value}`);
+        assert(!/html|body/.test(first.value), `路径含 html/body：${first.value}`);
+        return first.value;
+      });
+
+      // 11. 结构路径是所有候选里最脆的一个，失效后要能靠文本兜底
+      //     （这条会改动 DOM，放最后跑）
+      check('结构路径失效后靠文本兜底', () => {
+        const el = document.querySelector('.deep');
+        const desc = S.describe(el);
+        assert(desc.candidates[0].kind === 'structural', '前提不成立：该节点本应只有结构路径');
+
+        // 插一个包装层，模拟改版时多出一层 div —— nth-of-type 路径就此失效
+        const parent = el.parentElement;
+        const wrapper = document.createElement('div');
+        parent.insertBefore(wrapper, el);
+        wrapper.appendChild(el);
+
+        const { element, via } = S.resolve(desc);
+        assert(element === el, '结构路径失效后未能找回元素');
+        assert(via.kind === 'hint', `兜底方式应为 hint，实际 ${via.kind}`);
+        return `via=${via.kind}`;
       });
 
       const failed = results.filter((r) => r.startsWith('FAIL')).length;

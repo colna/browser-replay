@@ -276,18 +276,23 @@ async function runReplay({ scriptId, tabId, fromIndex = 0, stepDelayMs = 300 }) 
       result = { ok: false, error: String(error && error.message ? error.message : error) };
     }
 
+    // 焦点、滚动这类步骤不改变页面数据状态，失败了跳过就行。
+    // 让一个可有可无的 focus 把后面几十步真正有用的操作全部拦下来，是最糟的取舍。
+    const skipped = !result.ok && result.optional;
+
     const log = (current.log || []).concat([
       {
         index: i,
         type: step.type,
         ok: !!result.ok,
+        skipped,
         via: result.via ? `${result.via.kind}: ${result.via.value}` : null,
         error: result.ok ? null : result.error
       }
     ]);
 
-    if (!result.ok) {
-      // 失败即停：继续往下跑只会在错误的页面状态上制造更多噪声，
+    if (!result.ok && !skipped) {
+      // 关键步骤失败则停：继续往下跑只会在错误的页面状态上制造更多噪声，
       // 让用户看到「卡在第几步、为什么」远比跑完一堆失败步骤有用。
       await patchPlayState({ status: 'failed', cursor: i, log, error: result.error, finishedAt: Date.now() });
       await updateBadge();
@@ -299,7 +304,9 @@ async function runReplay({ scriptId, tabId, fromIndex = 0, stepDelayMs = 300 }) 
     if (stepDelayMs) await sleep(stepDelayMs);
   }
 
-  await patchPlayState({ status: 'done', finishedAt: Date.now() });
+  const finalState = await getPlayState();
+  const skippedCount = (finalState.log || []).filter((entry) => entry.skipped).length;
+  await patchPlayState({ status: 'done', skippedCount, finishedAt: Date.now() });
   await updateBadge();
   await broadcast(tabId, { type: 'BR_REPLAY_DONE' });
 }

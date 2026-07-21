@@ -217,6 +217,10 @@ async function main() {
     await sleep(150);
 
     await realClick(cdp, sessionId, '[name="agree"]');
+
+    // 点一下 SPA 风格的导航容器（带 tabindex，会真的拿到焦点）
+    await realClick(cdp, sessionId, '.css-navwrap-2k3l');
+
     await realClick(cdp, sessionId, '#remark');
     await realType(cdp, sessionId, '端到端验证');
     await realClick(cdp, sessionId, '[data-testid="submit-btn"]');
@@ -244,6 +248,23 @@ async function main() {
       '连续输入被合并成单步（未按键拆分）',
       inputSteps.length === 2 && inputSteps[0].value === 'Colna' && inputSteps[1].value === '端到端验证',
       inputSteps.map((s) => `${s.value}`).join(' | ')
+    );
+
+    // 布局容器的 focus 只能退到长结构路径，是脚本里最先失效的部分，不该被录进来
+    const focusTags = steps.filter((s) => s.type === 'focus' || s.type === 'blur').map((s) => s.target.tag);
+    check(
+      '布局容器的聚焦未被录制',
+      focusTags.every((tag) => ['input', 'textarea', 'select'].includes(tag)),
+      `聚焦步骤的目标标签：${[...new Set(focusTags)].join(', ')}`
+    );
+    // 结构路径应当从最近的地标 / 锚点起算，而不是从 html > body 一路铺下来
+    const paths = steps
+      .map((s) => s.target && s.target.candidates[0].value)
+      .filter((v) => v && v.includes('>'));
+    check(
+      '结构路径不从 html/body 起算',
+      paths.every((v) => !/^html|^body/.test(v)),
+      paths.join(' | ') || '(无结构路径)'
     );
 
     // ---------- 选择器质量 ----------
@@ -300,6 +321,53 @@ async function main() {
 
     const replayed = await evaluate(cdp, sessionId, 'window.__harness.summary()');
     check('回放复现出完全相同的表单数据', replayed === recorded, `${replayed}  (录制时: ${recorded})`);
+
+    // ---------- 失效步骤的处理 ----------
+    // 造一个目标已不存在的步骤（页面改版后的常态），验证：
+    // 可选步骤跳过继续、关键步骤中断，且错误信息说得清原因
+    const ghost = (type) => ({
+      type,
+      timeoutMs: 600,
+      target: {
+        candidates: [{ kind: 'id', value: '#元素已不存在', score: 92 }],
+        hints: {},
+        shadowPath: [],
+        tag: 'div'
+      }
+    });
+
+    await evaluate(cdp, sessionId, 'window.__harness.reset()');
+    const withGhostFocus = await evaluate(
+      cdp,
+      sessionId,
+      `window.__harness.replay(${JSON.stringify([ghost('focus'), ...steps])})`
+    );
+    check(
+      '失效的聚焦步骤被跳过而非中断',
+      withGhostFocus[0].skipped === true && withGhostFocus.length === steps.length + 1,
+      `第 1 步 skipped=${withGhostFocus[0].skipped}，共执行 ${withGhostFocus.length} 步`
+    );
+    check(
+      '跳过失效聚焦后仍完整复现表单',
+      (await evaluate(cdp, sessionId, 'window.__harness.summary()')) === recorded
+    );
+
+    await evaluate(cdp, sessionId, 'window.__harness.reset()');
+    const withGhostClick = await evaluate(
+      cdp,
+      sessionId,
+      `window.__harness.replay(${JSON.stringify([ghost('click'), ...steps])})`
+    );
+    check(
+      '失效的点击步骤中断回放',
+      withGhostClick.length === 1 && withGhostClick[0].ok === false,
+      `执行了 ${withGhostClick.length} 步`
+    );
+    check(
+      '错误信息指出了「找不到元素」并附上尝试过的选择器',
+      /找不到该元素/.test(withGhostClick[0].error) && /0 个匹配/.test(withGhostClick[0].error),
+      withGhostClick[0].error
+    );
 
     log('\n回放明细：');
     for (const entry of replayLog) {

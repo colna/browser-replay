@@ -130,9 +130,27 @@
     emit({ type: 'click', target: SELECTOR.describe(el), sinceLastMs: sinceLast() });
   }
 
+  /**
+   * 只录「聚焦本身是一个动作」的元素。
+   *
+   * 页面上大量元素会顺带拿到焦点：点按钮时按钮被聚焦、点导航时某个布局 div 被聚焦
+   * （SPA 常给容器挂 tabindex）。这些 focus 对回放毫无价值 —— 按钮的焦点由 click 自带，
+   * 布局容器的焦点根本不影响任何状态。但它们会各占一个步骤，而这类元素往往没有任何
+   * 稳定标识，只能退到 8 层 nth-of-type 结构路径，是整条脚本里最先失效的部分。
+   *
+   * 只有输入类元素的聚焦是真动作（决定了后续键盘输入落到哪）。
+   */
+  function isMeaningfulFocus(el) {
+    const tag = el.tagName;
+    if (tag === 'INPUT') return el.type !== 'hidden';
+    if (tag === 'TEXTAREA' || tag === 'SELECT') return true;
+    return !!el.isContentEditable;
+  }
+
   function onFocusIn(event) {
     const el = event.target;
     if (!el || isOwnUI(el) || el === document.body) return;
+    if (!isMeaningfulFocus(el)) return;
     emit({ type: 'focus', target: SELECTOR.describe(el), sinceLastMs: sinceLast() });
   }
 
@@ -141,6 +159,7 @@
     if (!el || isOwnUI(el) || el === document.body) return;
     // 输入必须在失焦前结算，否则回放顺序会变成「先失焦再填值」
     if (pendingInput && pendingInput.element === el) flushPendingInput();
+    if (!isMeaningfulFocus(el)) return;
     emit({ type: 'blur', target: SELECTOR.describe(el), sinceLastMs: sinceLast() });
   }
 
@@ -227,26 +246,61 @@
 
   // ------------------------------------------------------------------ 回放
 
-  async function locate(step) {
-    if (!step.target) return null;
-    const found = await WAITER.waitFor(
-      () => {
-        const { element, via } = SELECTOR.resolve(step.target);
-        if (!element) return null;
-        if (!WAITER.isInteractable(element)) return null;
-        return { element, via };
-      },
-      { timeout: step.timeoutMs || 10000, label: `${step.type} ${describeTarget(step.target)}` }
-    );
-    await WAITER.scrollIntoView(found.element);
-    await WAITER.waitStable(found.element);
-    return found;
+  /**
+   * 这些步骤失败不该中断整条回放：焦点、滚动位置都不改变页面数据状态，
+   * 而它们的目标又常常是没有稳定标识的布局节点。让一个可有可无的 focus
+   * 把后面几十步真正有用的操作全部拦下来，是最糟的取舍。
+   */
+  const OPTIONAL_STEPS = new Set(['focus', 'blur', 'scroll']);
+
+  /** 逐个候选报告匹配数量 —— 直接回答「页面上到底还有没有这个元素」 */
+  function diagnose(target) {
+    const lines = [];
+    for (const candidate of (target.candidates || []).slice(0, 4)) {
+      let count;
+      try {
+        count = document.querySelectorAll(candidate.value).length;
+      } catch {
+        lines.push(`${candidate.value} → 选择器非法`);
+        continue;
+      }
+      lines.push(`${candidate.value} → ${count} 个匹配`);
+    }
+    return lines.join('；');
   }
 
-  function describeTarget(target) {
-    if (!target) return '';
-    const first = (target.candidates || [])[0];
-    return first ? first.value : target.tag || '';
+  async function locate(step) {
+    if (!step.target) return { element: null, error: '该步没有定位信息' };
+
+    const optional = OPTIONAL_STEPS.has(step.type);
+    // 可选步骤不值得等满 10 秒 —— 它失败了也只是跳过，等待只是白白拖慢整条回放
+    const timeout = step.timeoutMs || (optional ? 2000 : 10000);
+    const deadline = Date.now() + timeout;
+
+    let sawElement = false;
+    while (Date.now() < deadline) {
+      const { element, via } = SELECTOR.resolve(step.target);
+      if (element) {
+        sawElement = true;
+        // focus / blur / scroll 不要求元素可交互：布局容器塌陷成 0 尺寸很常见，
+        // 但 el.focus() 照样有效。硬套可交互判定只会让它们永远等不到。
+        if (optional || WAITER.isInteractable(element)) {
+          await WAITER.scrollIntoView(element);
+          await WAITER.waitStable(element);
+          return { element, via };
+        }
+      }
+      await WAITER.sleep(100);
+    }
+
+    const reason = sawElement
+      ? '元素找到了但一直不可交互（不可见 / 被禁用 / 尺寸为 0）'
+      : '页面上找不到该元素';
+    return {
+      element: null,
+      error: `${reason}。已尝试：${diagnose(step.target)}`,
+      notFound: !sawElement
+    };
   }
 
   async function execute(step) {
@@ -259,7 +313,11 @@
     }
 
     const found = await locate(step);
-    if (!found) return { ok: false, error: '缺少定位信息' };
+    if (!found.element) {
+      // optional 交给 background 决定跳过还是中断 —— 「失败了要不要继续」是回放策略，
+      // 页面这层只负责如实报告「这步是什么性质、为什么没做成」
+      return { ok: false, error: found.error, optional: OPTIONAL_STEPS.has(step.type) };
+    }
     const el = found.element;
 
     switch (step.type) {

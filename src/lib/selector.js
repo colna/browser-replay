@@ -84,6 +84,11 @@
     return `${tag}:nth-of-type(${sameTag.indexOf(el) + 1})`;
   }
 
+  // 地标标签在一个页面里通常只有一个，且极少因改版而挪位置，
+  // 用它当结构路径的起点，能把 `html > body > div > div > nav > …` 砍成 `nav > …`。
+  // 路径每短一层，扛住改版的概率就高一截。
+  const LANDMARK_TAGS = ['nav', 'main', 'header', 'footer', 'aside', 'form', 'table'];
+
   /** 该元素自身有没有一个「不依赖祖先」就唯一的锚点选择器 */
   function selfAnchor(el, root) {
     for (const attr of TEST_ATTRS) {
@@ -97,6 +102,8 @@
       const css = `#${escapeIdent(el.id)}`;
       if (isUniqueIn(root, css, el)) return css;
     }
+    const tag = tagOf(el);
+    if (LANDMARK_TAGS.includes(tag) && isUniqueIn(root, tag, el)) return tag;
     return null;
   }
 
@@ -303,12 +310,10 @@
    * 按候选顺序解析。返回命中的元素与命中方式，供调用方记录「这一步靠什么定位成功」——
    * 回放报告里能直接看出哪些步骤已经在靠兜底策略苟着，是脚本该维护的信号。
    */
-  function resolve(target) {
-    if (!target) return { element: null, via: null };
-    const root = resolveRoot(target.shadowPath);
-    if (!root) return { element: null, via: null };
+  const HINT_SCORE = 55;
 
-    for (const candidate of target.candidates || []) {
+  function tryCandidates(root, candidates) {
+    for (const candidate of candidates) {
       let el;
       try {
         el = root.querySelector(candidate.value);
@@ -317,11 +322,28 @@
       }
       if (el) return { element: el, via: candidate };
     }
+    return null;
+  }
 
+  function resolve(target) {
+    if (!target) return { element: null, via: null };
+    const root = resolveRoot(target.shadowPath);
+    if (!root) return { element: null, via: null };
+
+    const candidates = target.candidates || [];
+
+    // 语义类候选（测试属性 / id / name / aria）优先
+    const strong = tryCandidates(root, candidates.filter((c) => c.score >= HINT_SCORE));
+    if (strong) return strong;
+
+    // 文本线索排在结构路径之前：一个 6 层的 `nav > div > div > div` 只要中间插进一个
+    // 包装层就全废，而按钮上的文字通常改版也还在。深层结构路径是所有候选里最不可信的一个。
     const byHint = matchByHints(root, target);
-    if (byHint) return { element: byHint, via: { kind: 'hint', value: JSON.stringify(target.hints), score: 20 } };
+    if (byHint) {
+      return { element: byHint, via: { kind: 'hint', value: JSON.stringify(target.hints), score: HINT_SCORE } };
+    }
 
-    return { element: null, via: null };
+    return tryCandidates(root, candidates.filter((c) => c.score < HINT_SCORE)) || { element: null, via: null };
   }
 
   window.__BR_SELECTOR__ = { describe, resolve, buildCandidates, isUnstableId };

@@ -15,6 +15,14 @@
   <body>
     <h1>录制 / 回放 harness</h1>
 
+    <!-- 模拟 SPA 导航栏：多层无标识布局 div，容器带 tabindex 所以点击时会真的拿到焦点。
+         这类元素的 focus 不该被录进脚本 —— 它只能退到长结构路径，是最先失效的部分。 -->
+    <nav class="css-nav-7h8j">
+      <div class="css-navwrap-2k3l" tabindex="-1">
+        <div class="css-navinner-9p0q"><div class="css-navitem-4r5t">导航容器</div></div>
+      </div>
+    </nav>
+
     <!-- 结构与真实站点对齐：class 全是构建产物、id 有动态的、按钮带 data-testid -->
     <form class="css-form-1x2y" id="demo-form" onsubmit="return false">
       <div class="css-field-9a8b">
@@ -104,6 +112,7 @@
         steps: () => collectedSteps.slice(),
         reset: resetForm,
         summary: () => document.getElementById('summary').textContent,
+        // 这里复刻 background 的回放策略：可选步骤（focus/blur/scroll）失败跳过、关键步骤失败中断
         async replay(steps) {
           const log = [];
           for (let i = 0; i < steps.length; i += 1) {
@@ -113,8 +122,9 @@
               index: i,
               total: steps.length
             });
-            log.push({ index: i, type: steps[i].type, ...result });
-            if (!result.ok) break;
+            const skipped = !result.ok && !!result.optional;
+            log.push({ index: i, type: steps[i].type, skipped, ...result });
+            if (!result.ok && !skipped) break;
           }
           return log;
         }

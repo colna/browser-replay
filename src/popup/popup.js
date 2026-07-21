@@ -88,7 +88,8 @@ function renderProgress() {
   els.progressBox.hidden = false;
 
   const labels = { running: '回放中', done: '回放完成', failed: '回放失败', stopped: '已停止' };
-  els.progressLabel.textContent = labels[play.status] || play.status;
+  const skipped = play.skippedCount ? `（跳过 ${play.skippedCount} 步聚焦/滚动）` : '';
+  els.progressLabel.textContent = (labels[play.status] || play.status) + skipped;
   els.progressCount.textContent = `${play.cursor || 0} / ${play.total || 0}`;
 
   const pct = play.total ? Math.round(((play.cursor || 0) / play.total) * 100) : 0;
