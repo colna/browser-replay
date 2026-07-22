@@ -183,7 +183,49 @@
         return first.value;
       });
 
-      // 11. 结构路径是所有候选里最脆的一个，失效后要能靠文本兜底
+      // 11. 祖先链：结构快照不含 class，到 body 即止
+      check('祖先链快照无 class 且到 body 止', () => {
+        const el = document.querySelector('.deep');
+        const chain = S.describe(el).ancestors;
+        assert(chain.length > 0, '祖先链为空');
+        assert(chain.length <= 10, `超过 10 层：${chain.length}`);
+        chain.forEach((a, i) => assert(a.depth === i + 1, `depth 不连续：${JSON.stringify(chain.map((x) => x.depth))}`));
+
+        const dumped = JSON.stringify(chain);
+        assert(!/"class"/.test(dumped), `祖先链记录了 class：${dumped}`);
+        assert(!/css-/.test(dumped), `祖先链混进了构建 class 值：${dumped}`);
+
+        assert(chain[0].tag === 'li', `直接父应为 li，实际 ${chain[0].tag}`);
+        assert(chain[chain.length - 1].tag === 'body', `末层应为 body，实际 ${chain[chain.length - 1].tag}`);
+        return chain.map((a) => a.nth).join(' < ');
+      });
+
+      // 12. 祖先链要能跨过 shadow 边界，否则组件内的动作只剩一层上下文
+      check('祖先链跨 shadow 边界', () => {
+        const el = shadow.querySelector('[data-testid="shadow-btn"]');
+        const chain = S.describe(el).ancestors;
+        const crossed = chain.find((a) => a.shadowHost);
+        assert(crossed, `未标记 shadowHost：${JSON.stringify(chain)}`);
+        assert(crossed.attrs && crossed.attrs.id === 'shadow-host', `宿主应为 #shadow-host：${JSON.stringify(crossed)}`);
+        return `${chain.length} 层，宿主在第 ${crossed.depth} 层`;
+      });
+
+      // 13. 超深结构截断在 10 层（用游离 DOM，不污染文档）
+      check('祖先链上限 10 层', () => {
+        let node = document.createElement('div');
+        const root = node;
+        for (let i = 0; i < 15; i += 1) {
+          const child = document.createElement('div');
+          node.appendChild(child);
+          node = child;
+        }
+        const chain = S.buildAncestors(node);
+        assert(chain.length === 10, `应截断到 10 层，实际 ${chain.length}`);
+        assert(root.contains(node), '前提不成立：游离树未连通');
+        return `${chain.length} 层`;
+      });
+
+      // 14. 结构路径是所有候选里最脆的一个，失效后要能靠文本兜底
       //     （这条会改动 DOM，放最后跑）
       check('结构路径失效后靠文本兜底', () => {
         const el = document.querySelector('.deep');

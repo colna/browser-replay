@@ -252,6 +252,80 @@
     return anchor || structuralPath(host, root);
   }
 
+  /** 祖先链最大层数。10 层在多数页面已经能走到 body 或某个地标容器。 */
+  const MAX_ANCESTORS = 10;
+
+  /** 祖先自身的直接文本（不含后代），用来认出「这是哪一行/哪个卡片」 */
+  function directTextOf(el) {
+    let out = '';
+    for (const node of el.childNodes) {
+      if (node.nodeType === Node.TEXT_NODE) out += node.nodeValue;
+    }
+    out = out.replace(/\s+/g, ' ').trim();
+    return out.length > MAX_TEXT_LEN ? out.slice(0, MAX_TEXT_LEN) + '…' : out;
+  }
+
+  /**
+   * 祖先的属性快照。白名单取值，**同样不含 class** —— 这份数据是给人和下游工具
+   * 看结构用的，混进 hash class 只会是噪声。不稳定 id 也不记，理由同 isUnstableId。
+   */
+  function ancestorAttrs(el) {
+    const attrs = {};
+    for (const attr of TEST_ATTRS.concat(SEMANTIC_ATTRS)) {
+      const v = el.getAttribute(attr);
+      if (v) attrs[attr] = v.length > MAX_TEXT_LEN ? v.slice(0, MAX_TEXT_LEN) + '…' : v;
+    }
+    if (el.id && !isUnstableId(el.id)) attrs.id = el.id;
+    return attrs;
+  }
+
+  /**
+   * 往外 10 层祖先的结构快照。depth 从 1 起算（1 = 直接父元素）。
+   *
+   * 记的是每层祖先「自己」是什么，不是它的 outerHTML —— 第 10 层祖先的 outerHTML
+   * 往往就是大半个页面，塞进导出 JSON 既没法读也没法比对。
+   * 逐层带上 nth-of-type 与 childCount 后，「第几个列表项」这类上下文一样能还原。
+   */
+  function buildAncestors(el) {
+    const chain = [];
+    let node = el;
+    let depth = 0;
+
+    while (chain.length < MAX_ANCESTORS && depth < MAX_ANCESTORS * 2) {
+      depth += 1;
+      let parent = node.parentElement;
+      let crossedShadow = false;
+
+      // 到了 shadow root 的顶：继续往宿主元素上走，否则链会在组件边界断掉
+      if (!parent) {
+        const root = node.getRootNode();
+        if (root instanceof ShadowRoot && root.host) {
+          parent = root.host;
+          crossedShadow = true;
+        }
+      }
+      if (!parent) break;
+
+      const entry = {
+        depth: chain.length + 1,
+        tag: tagOf(parent),
+        nth: nthOfType(parent),
+        childCount: parent.children.length
+      };
+      const attrs = ancestorAttrs(parent);
+      if (Object.keys(attrs).length) entry.attrs = attrs;
+      const text = directTextOf(parent);
+      if (text) entry.text = text;
+      if (crossedShadow) entry.shadowHost = true;
+
+      chain.push(entry);
+      node = parent;
+      if (entry.tag === 'body' || entry.tag === 'html') break;
+    }
+
+    return chain;
+  }
+
   function describe(el) {
     if (!el || el.nodeType !== Node.ELEMENT_NODE) return null;
     const rect = el.getBoundingClientRect();
@@ -259,6 +333,7 @@
       candidates: buildCandidates(el),
       hints: buildTextHints(el),
       shadowPath: shadowPath(el),
+      ancestors: buildAncestors(el),
       tag: tagOf(el),
       // 视口相对比例：所有选择器都失效时的最后手段，换分辨率仍可近似还原
       viewportRatio: {
@@ -346,5 +421,5 @@
     return tryCandidates(root, candidates.filter((c) => c.score < HINT_SCORE)) || { element: null, via: null };
   }
 
-  window.__BR_SELECTOR__ = { describe, resolve, buildCandidates, isUnstableId };
+  window.__BR_SELECTOR__ = { describe, resolve, buildCandidates, isUnstableId, buildAncestors };
 })();

@@ -11,7 +11,7 @@ export function toExport(script) {
     startUrl: script.startUrl,
     createdAt: new Date(script.createdAt).toISOString(),
     stepCount: script.steps.length,
-    note: '所有选择器均不含 class；structural 类型使用 tag:nth-of-type() 结构路径。',
+    note: '所有选择器均不含 class；structural 类型使用 tag:nth-of-type() 结构路径；ancestors 为动作元素往外最多 10 层祖先快照（depth 1 = 直接父）。',
     steps: script.steps.map((step, index) => {
       const target = step.target;
       const best = target && target.candidates && target.candidates[0];
@@ -36,6 +36,8 @@ export function toExport(script) {
         out.scrollY = step.scrollY;
       }
       if (target && target.shadowPath && target.shadowPath.length) out.shadowPath = target.shadowPath;
+      // 动作元素往外最多 10 层祖先的结构快照，供下游工具理解上下文 / 人工核对
+      if (target && target.ancestors && target.ancestors.length) out.ancestors = target.ancestors;
       Object.keys(out).forEach((k) => out[k] === undefined && delete out[k]);
       return out;
     })
