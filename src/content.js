@@ -63,35 +63,75 @@
 
   // ------------------------------------------------------------------ 录制
 
-  function flushPendingInput() {
-    if (!pendingInput) return;
-    const { target, value, masked } = pendingInput;
-    pendingInput = null;
-    emit({ type: 'input', target, value, masked, sinceLastMs: sinceLast() });
+  function readValue(el) {
+    return el.isContentEditable ? el.textContent : el.value;
   }
 
-  function onInput(event) {
-    const el = event.target;
-    if (!el || isOwnUI(el)) return;
-    if (el.tagName === 'SELECT') return; // select 由 change 负责
+  /**
+   * 每个元素最近一次已经录进脚本的值。用它判断「真的变了吗」：
+   * 没变就不该多记一步，变了就必须记 —— 无论变化是哪个事件带来的。
+   */
+  const recordedValues = new WeakMap();
+
+  function emitInputFor(el, target) {
+    if (!canRecordValue(el)) return;
+    const masked = isSensitive(el);
+    const value = readValue(el);
+    if (recordedValues.get(el) === value) return; // 值没动过，不记冗余步骤
+    recordedValues.set(el, value);
+    emit({
+      type: 'input',
+      target: target || SELECTOR.describe(el),
+      value: masked ? '' : value,
+      masked,
+      sinceLastMs: sinceLast()
+    });
+  }
+
+  /**
+   * 结算时才去读元素的当前值，而不是在事件里读。
+   *
+   * 自绘编辑器（Lexical / Draft.js / Snapchat 的输入框等）在 `beforeinput` 里
+   * `preventDefault()` 然后自己写 DOM —— 默认插入被取消，浏览器**就不再派发 `input`**。
+   * 事件发生的那一刻内容还没落到 DOM 上，当场读只能读到旧值。
+   */
+  function flushPendingInput() {
+    if (!pendingInput) return;
+    const { element, target } = pendingInput;
+    pendingInput = null;
+    emitInputFor(element, target);
+  }
+
+  /** 这个元素的值该不该被录成 input 步骤 */
+  function canRecordValue(el) {
+    if (el.tagName === 'SELECT') return false; // 由 change 负责，录成 select 步骤
     // 勾选 checkbox/radio 同样会派发 input，此时 el.value 是 value 属性（如 "yes"、缺省 "on"），
     // 不是用户输入的内容 —— 记下来会变成一步毫无意义的「输入 yes」。状态变化交给 change。
-    if (el.type === 'checkbox' || el.type === 'radio') return;
+    if (el.type === 'checkbox' || el.type === 'radio') return false;
     // file input 的值受安全策略保护，回放时无法写回，录了也只会在回放时报错
-    if (el.type === 'file') return;
+    if (el.type === 'file') return false;
+    return el.isContentEditable || el.value !== undefined;
+  }
 
-    const masked = isSensitive(el);
-    const value = el.isContentEditable ? el.textContent : el.value;
+  function markPendingInput(el) {
+    if (!el || isOwnUI(el)) return;
+    if (!canRecordValue(el)) return;
 
     // 换了元素就把上一个元素的输入结算掉，保证顺序正确
     if (pendingInput && pendingInput.element !== el) flushPendingInput();
 
-    pendingInput = {
-      element: el,
-      target: SELECTOR.describe(el),
-      value: masked ? '' : value,
-      masked
-    };
+    // 选择器在这里就算好：等到结算时元素可能已被编辑器重建，届时描述的就不是同一个节点了
+    if (!pendingInput) pendingInput = { element: el, target: SELECTOR.describe(el) };
+  }
+
+  function onInput(event) {
+    markPendingInput(event.target);
+  }
+
+  // beforeinput 在内容落进 DOM 之前触发，且**无论页面是否 preventDefault 都会派发** ——
+  // 自绘编辑器唯一还能被外部观测到的输入信号。这里只做标记，值留到结算时再读。
+  function onBeforeInput(event) {
+    markPendingInput(event.target);
   }
 
   function onChange(event) {
@@ -194,6 +234,8 @@
     const el = event.target;
     if (!el || isOwnUI(el) || el === document.body) return;
     if (!isMeaningfulFocus(el)) return;
+    // 以聚焦时的内容为基线，之后只有真的变了才记 input
+    recordedValues.set(el, readValue(el));
     emit({ type: 'focus', target: SELECTOR.describe(el), sinceLastMs: sinceLast() });
   }
 
@@ -203,6 +245,9 @@
     // 输入必须在失焦前结算，否则回放顺序会变成「先失焦再填值」
     if (pendingInput && pendingInput.element === el) flushPendingInput();
     if (!isMeaningfulFocus(el)) return;
+    // 兜底：连 beforeinput 都没派发过（表情面板、粘贴按钮这类纯 JS 塞值），
+    // 但内容确实变了 —— 不补这一步，回放出来就是个空框
+    emitInputFor(el);
     emit({ type: 'blur', target: SELECTOR.describe(el), sinceLastMs: sinceLast() });
   }
 
@@ -258,6 +303,7 @@
   const LISTENERS = [
     ['click', onClick],
     ['input', onInput],
+    ['beforeinput', onBeforeInput],
     ['change', onChange],
     ['focusin', onFocusIn],
     ['focusout', onFocusOut],

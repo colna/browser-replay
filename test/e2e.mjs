@@ -380,6 +380,60 @@ async function main() {
       withGhostClick[0].error
     );
 
+    // ---------- 自绘编辑器（Snapchat / Lexical 同构） ----------
+    // 独立录一段，不并进上面那轮，避免动到已有断言的步骤序列
+    log('\n── 自绘编辑器 ──');
+    await evaluate(cdp, sessionId, 'window.__harness.reset(); window.__harness.resetChat(); window.__harness.clearSteps()');
+    await evaluate(cdp, sessionId, 'window.__harness.startRecord()');
+    await sleep(200);
+
+    await realClick(cdp, sessionId, '[placeholder="Send a chat"]');
+    await realType(cdp, sessionId, 'hi');
+    await realClick(cdp, sessionId, '.css-sendicon-4q'); // 点的是 svg，意图是点它外面的按钮
+    await sleep(150);
+    await realClick(cdp, sessionId, '[placeholder="Send a chat"]');
+    await realType(cdp, sessionId, 'hello');
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }, sessionId);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }, sessionId);
+    await sleep(200);
+
+    const chatRecorded = await evaluate(cdp, sessionId, 'window.__harness.chatLog()');
+    check('录制阶段两条消息确实发出去了', chatRecorded === 'hi|hello', chatRecorded);
+
+    const chatSteps = await evaluate(cdp, sessionId, 'window.__harness.stopRecord()');
+    const chatInputs = chatSteps.filter((s) => s.type === 'input');
+    check(
+      '自绘编辑器的输入被录进来了',
+      chatInputs.length === 2 && chatInputs[0].value === 'hi' && chatInputs[1].value === 'hello',
+      chatInputs.length ? chatInputs.map((s) => JSON.stringify(s.value)).join(' | ') : '(一条 input 步骤都没有)'
+    );
+
+    const svgStep = chatSteps.find((s) => s.type === 'click' && s.target && s.target.tag === 'svg');
+    check(
+      '点发送图标时上溯到按钮而非停在 svg',
+      !svgStep,
+      svgStep ? `停在了 svg：${svgStep.target.candidates[0].value}` : ''
+    );
+
+    const chatScrolls = chatSteps.filter((s) => s.type === 'scroll');
+    check(
+      '没有录进原地不动的滚动',
+      chatScrolls.length === 0,
+      chatScrolls.map((s) => `(${s.scrollX},${s.scrollY})`).join(' ')
+    );
+
+    await evaluate(cdp, sessionId, 'window.__harness.resetChat()');
+    const chatReplayLog = await evaluate(cdp, sessionId, `window.__harness.replay(${JSON.stringify(chatSteps)})`);
+    const chatFailed = chatReplayLog.filter((entry) => !entry.ok && !entry.skipped);
+    check(
+      '回放自绘编辑器全部步骤成功',
+      chatFailed.length === 0,
+      chatFailed.map((f) => `#${f.index} ${f.type}: ${f.error}`).join('; ')
+    );
+
+    const chatReplayed = await evaluate(cdp, sessionId, 'window.__harness.chatLog()');
+    check('回放发出的消息与录制时逐字一致', chatReplayed === chatRecorded, `${chatReplayed}  (录制时: ${chatRecorded})`);
+
     log('\n回放明细：');
     for (const entry of replayLog) {
       const via = entry.via ? `${entry.via.kind}: ${entry.via.value}` : entry.error || '';

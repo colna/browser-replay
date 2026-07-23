@@ -61,6 +61,20 @@
     <h3>提交结果</h3>
     <p id="summary">-</p>
 
+    <!-- 模拟 Snapchat / Lexical / Draft.js 这类自绘编辑器，两处与普通 contenteditable 不同：
+         1. beforeinput 里 preventDefault，自己维护内容 —— 浏览器因此**不再派发 input 事件**
+         2. 真正的内容在内部 model 里，DOM 只是渲染结果，发送时读 model 不读 DOM
+         只监听 input 的录制器会完全录不到输入；直接写 textContent 的回放则发出空消息。 -->
+    <div class="css-composer-8x3n" role="presentation">
+      <div class="css-editwrap-2p" contenteditable="true" placeholder="Send a chat"></div>
+      <button class="css-send-1z" type="button">
+        <svg class="css-sendicon-4q" viewBox="0 0 16 16" width="16" height="16"><path d="M0 0l16 8-16 8z" /></svg>
+      </button>
+    </div>
+
+    <h3>已发送</h3>
+    <p id="chat-log">-</p>
+
     <script>
       // ---- chrome API 桩：让未经改动的 content.js 能原样跑在普通页面里 ----
       const collectedSteps = [];
@@ -103,6 +117,62 @@
           `nickname=${form.nickname.value};city=${form.city.value};agree=${form.agree.checked};remark=${form.remark.value}`;
       });
 
+      // ---- 自绘编辑器：内容的真源是 model，DOM 只是它的投影 ----
+      const editor = document.querySelector('[placeholder="Send a chat"]');
+      const sendBtn = document.querySelector('.css-send-1z');
+      let model = '';
+      const sentMessages = [];
+
+      function renderEditor() {
+        editor.textContent = model;
+        // 光标归到末尾，否则下一次输入会插在开头
+        const range = document.createRange();
+        range.selectNodeContents(editor);
+        range.collapse(false);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+
+      editor.addEventListener('beforeinput', (event) => {
+        if (event.inputType === 'insertText' && event.data != null) {
+          event.preventDefault();
+          model += event.data;
+          renderEditor();
+        } else if (event.inputType === 'deleteContentBackward') {
+          event.preventDefault();
+          model = model.slice(0, -1);
+          renderEditor();
+        } else if (event.inputType === 'insertFromPaste' || event.inputType === 'insertReplacementText') {
+          event.preventDefault();
+          model = event.data == null ? '' : String(event.data);
+          renderEditor();
+        }
+      });
+
+      function sendMessage() {
+        if (!model) return; // 空 model 发不出去 —— 直接改 DOM 的回放会卡在这
+        sentMessages.push(model);
+        model = '';
+        renderEditor();
+        document.getElementById('chat-log').textContent = sentMessages.join('|');
+      }
+
+      sendBtn.addEventListener('click', sendMessage);
+      editor.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          sendMessage();
+        }
+      });
+
+      function resetChat() {
+        model = '';
+        sentMessages.length = 0;
+        editor.textContent = '';
+        document.getElementById('chat-log').textContent = '-';
+      }
+
       function resetForm() {
         const form = document.getElementById('demo-form');
         form.reset();
@@ -117,8 +187,13 @@
           return collectedSteps.slice();
         },
         steps: () => collectedSteps.slice(),
+        clearSteps: () => {
+          collectedSteps.length = 0;
+        },
         reset: resetForm,
+        resetChat,
         summary: () => document.getElementById('summary').textContent,
+        chatLog: () => document.getElementById('chat-log').textContent,
         // 这里复刻 background 的回放策略：可选步骤（focus/blur/scroll）失败跳过、关键步骤失败中断
         async replay(steps) {
           const log = [];

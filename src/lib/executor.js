@@ -85,12 +85,59 @@
     fireMouse(el, 'click', coords, { detail: 1 });
   }
 
+  /** 把选区铺满整个元素，让后续插入等价于「全选后覆盖」 */
+  function selectAllWithin(el) {
+    const selection = window.getSelection();
+    if (!selection) return false;
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return true;
+  }
+
+  /**
+   * 自绘编辑器（Lexical / Draft.js / Snapchat 的输入框等）的内容真源是内部 model，
+   * DOM 只是渲染结果 —— 直接写 `textContent` 它根本收不到，发送时读的还是空 model，
+   * 于是「每一步都执行成功、消息却是空的」，比报错更难发现。
+   *
+   * 这类编辑器的输入通道是 `beforeinput`：它在那里 `preventDefault()` 并把内容写进
+   * 自己的 model。所以合成一个 beforeinput 喂给它 —— 事件被吃掉（`dispatchEvent`
+   * 返回 false）就说明编辑器接管了，此时**不能**再去碰 DOM，否则只会让两边状态打架。
+   *
+   * 注意 `execCommand('insertText')` 在这里没用：实测它直接改 DOM 而**不派发 beforeinput**，
+   * 效果等同于直写 textContent。
+   */
+  async function typeIntoEditable(el, value) {
+    selectAllWithin(el);
+
+    if (value !== '') {
+      const taken = !el.dispatchEvent(
+        new InputEvent('beforeinput', {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          inputType: 'insertText',
+          data: value
+        })
+      );
+      if (taken) {
+        // 编辑器可能在下一帧才把 model 渲染出来
+        await nextFrame();
+        return;
+      }
+    }
+
+    // 普通 contenteditable：没人接管，自己写。派发 input 让框架感知。
+    el.textContent = value;
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: value }));
+  }
+
   async function type(el, value) {
     if (typeof el.focus === 'function') el.focus({ preventScroll: true });
 
     if (el.isContentEditable) {
-      el.textContent = value;
-      el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: value }));
+      await typeIntoEditable(el, value);
       return;
     }
 
