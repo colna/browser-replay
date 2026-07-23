@@ -265,15 +265,27 @@
     return out.length > MAX_TEXT_LEN ? out.slice(0, MAX_TEXT_LEN) + '…' : out;
   }
 
+  // class 是项目硬约束（构建产物，改版即变）；style 是渲染结果，逐帧都可能不同
+  const ANCESTOR_SKIP_ATTRS = ['class', 'style'];
+
   /**
-   * 祖先的属性快照。白名单取值，**同样不含 class** —— 这份数据是给人和下游工具
-   * 看结构用的，混进 hash class 只会是噪声。不稳定 id 也不记，理由同 isUnstableId。
+   * 祖先的属性快照：**除 class / style 外全部取**。
+   *
+   * 早先这里走白名单（TEST_ATTRS + SEMANTIC_ATTRS），漏掉的恰恰是判断状态最需要的那些 ——
+   * `aria-expanded` / `aria-selected` / `aria-checked` 说明当前是展开还是选中，
+   * `tabindex` / `disabled` 说明能不能交互，站点自定义的 `data-*` 往往是唯一的语义标记。
+   * 白名单永远追不上各家站点，所以反过来：默认全收，只排掉明确是噪声的。
+   *
+   * 空值属性照记（`disabled` / `hidden` 这类布尔属性，「存在」本身就是信息）。
+   * id 例外，仍按 isUnstableId 判稳后才记 —— 否则每次录制都会多出一堆 `:r7:`，没法比对。
    */
   function ancestorAttrs(el) {
     const attrs = {};
-    for (const attr of TEST_ATTRS.concat(SEMANTIC_ATTRS)) {
-      const v = el.getAttribute(attr);
-      if (v) attrs[attr] = v.length > MAX_TEXT_LEN ? v.slice(0, MAX_TEXT_LEN) + '…' : v;
+    const list = el.attributes;
+    for (let i = 0; i < list.length; i += 1) {
+      const { name, value } = list[i];
+      if (name === 'id' || ANCESTOR_SKIP_ATTRS.includes(name)) continue;
+      attrs[name] = value.length > MAX_TEXT_LEN ? value.slice(0, MAX_TEXT_LEN) + '…' : value;
     }
     if (el.id && !isUnstableId(el.id)) attrs.id = el.id;
     return attrs;

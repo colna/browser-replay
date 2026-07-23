@@ -30,7 +30,20 @@
         <button class="submit css-sub" type="submit">提交</button>
       </form>
 
-      <ul class="list css-list">
+      <!-- 祖先身上挂的状态位（展开/选中/能否交互）和站点自定义标记，是判断当前处于什么状态的
+           唯一依据，白名单取属性时全被漏掉了 —— 这里覆盖到 -->
+      <ul
+        class="list css-list"
+        role="listbox"
+        aria-expanded="true"
+        aria-selected="false"
+        tabindex="-1"
+        data-chat-id="1510ad46"
+        data-state="open"
+        hidden=""
+        id=":r9:"
+        style="margin: 0"
+      >
         <li class="item css-item">第一项</li>
         <li class="item css-item">第二项</li>
         <li class="item css-item"><span class="deep css-deep">深层无标识节点</span></li>
@@ -198,6 +211,34 @@
         assert(chain[0].tag === 'li', `直接父应为 li，实际 ${chain[0].tag}`);
         assert(chain[chain.length - 1].tag === 'body', `末层应为 body，实际 ${chain[chain.length - 1].tag}`);
         return chain.map((a) => a.nth).join(' < ');
+      });
+
+      // 11b. 祖先属性除 class / style 外全收 —— 白名单会漏掉状态位和站点自定义标记
+      check('祖先属性全收，仅排除 class / style / 不稳定 id', () => {
+        const el = document.querySelector('.deep');
+        const chain = S.describe(el).ancestors;
+        const ul = chain.find((a) => a.tag === 'ul');
+        assert(ul && ul.attrs, `没拿到 ul 的属性：${JSON.stringify(chain)}`);
+
+        // 白名单里没有、但判断状态必须的
+        for (const [name, value] of [
+          ['aria-expanded', 'true'],
+          ['aria-selected', 'false'],
+          ['tabindex', '-1'],
+          ['data-chat-id', '1510ad46'],
+          ['data-state', 'open']
+        ]) {
+          assert(ul.attrs[name] === value, `缺属性 ${name}：${JSON.stringify(ul.attrs)}`);
+        }
+        // 布尔属性「存在」本身就是信息，空值也要记
+        assert(ul.attrs.hidden === '', `布尔属性 hidden 未记录：${JSON.stringify(ul.attrs)}`);
+        // 白名单原有的不能丢
+        assert(ul.attrs.role === 'listbox', `role 丢了：${JSON.stringify(ul.attrs)}`);
+
+        assert(!('class' in ul.attrs), `记了 class：${JSON.stringify(ul.attrs)}`);
+        assert(!('style' in ul.attrs), `记了 style：${JSON.stringify(ul.attrs)}`);
+        assert(!('id' in ul.attrs), `记了不稳定 id :r9:：${JSON.stringify(ul.attrs)}`);
+        return Object.keys(ul.attrs).sort().join(', ');
       });
 
       // 12. 祖先链要能跨过 shadow 边界，否则组件内的动作只剩一层上下文
