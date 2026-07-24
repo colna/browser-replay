@@ -133,8 +133,21 @@
     return el.isContentEditable || el.value !== undefined;
   }
 
+  /**
+   * 归一到「编辑宿主」——带 contenteditable 的那个元素本身。
+   *
+   * 自绘编辑器（Lexical / Draft.js）每次输入都会重建内部的 p / span，结算时手里那个
+   * 深层节点很可能已经脱离文档：`isContentEditable` 变成 false、`textContent` 读到旧值，
+   * 于是 `canRecordValue` 判否，整步输入被静默丢掉。宿主节点是稳定的，只认它。
+   */
+  function editingHostOf(el) {
+    if (!el || !el.closest || !el.isContentEditable) return el;
+    return el.closest('[contenteditable=""],[contenteditable="true"]') || el;
+  }
+
   function markPendingInput(el) {
     if (!el || isOwnUI(el)) return;
+    el = editingHostOf(el);
     if (!canRecordValue(el)) return;
     // 逐键元素的输入由 keystroke 步骤逐个记，不再走值快照这条路（避免同一次输入记两遍、回放打两遍）。
     // 键盘之外的改动（粘贴 / 表情 / IME 提交）另有 blur 兜底与 compositionend 处理。
@@ -281,6 +294,9 @@
     emit({ type: 'blur', target: SELECTOR.describe(el), sinceLastMs: sinceLast() });
   }
 
+  /** contenteditable 上会改动内容、因而需要标记待结算的非字符键 */
+  const EDITABLE_EDIT_KEYS = new Set(['Backspace', 'Delete']);
+
   const FUNCTIONAL_KEYS = new Set([
     'Enter', 'Tab', 'Escape', 'Backspace', 'Delete',
     'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'
@@ -327,6 +343,13 @@
     // 逐键路径：选区安全的文本输入，且非 IME 组字、非组合键（Ctrl/Cmd/Alt 快捷键仍按功能键记）
     if (isPerKeyTarget(el) && !event.isComposing && !composing.has(el) && !isCombo) {
       if (recordKeystroke(el, event)) return;
+    }
+
+    // 自绘编辑器的输入不能只押在 beforeinput / input 上：实测有站点（Instagram DM 的 Lexical）
+    // 这两个事件一条都收不到，而 keydown 照常派发。打字时同样标记待结算，值仍留到结算时
+    // 从活着的宿主节点上读 —— 少了这条，整段输入会被静默丢掉，回放出来就是发一条空消息。
+    if (el.isContentEditable && !isCombo && (event.key.length === 1 || EDITABLE_EDIT_KEYS.has(event.key))) {
+      markPendingInput(el);
     }
 
     if (!FUNCTIONAL_KEYS.has(event.key) && !isCombo) return; // 普通字符由 input / keystroke 覆盖
@@ -444,6 +467,11 @@
    */
   const OPTIONAL_STEPS = new Set(['focus', 'blur', 'scroll']);
 
+  /** 目标即「当前焦点元素」的步骤：定位不到、或只靠脆弱的结构路径命中时，退到 document.activeElement */
+  const KEY_STEPS = new Set(['key', 'keystroke']);
+  /** 「语义候选」的分数下限（测试属性 / id / name / aria），低于它的只有结构路径 */
+  const STRONG_SCORE = 55;
+
   /** 逐个候选报告匹配数量 —— 直接回答「页面上到底还有没有这个元素」 */
   function diagnose(target) {
     const lines = [];
@@ -464,8 +492,11 @@
     if (!step.target) return { element: null, error: '该步没有定位信息' };
 
     const optional = OPTIONAL_STEPS.has(step.type);
+    // 一个候选都没有时，只剩文本线索能救，等满 10 秒毫无意义 —— 该等的是元素渲染出来，
+    // 不是等一个根本不存在的选择器
+    const noCandidates = !(step.target.candidates || []).length;
     // 可选步骤不值得等满 10 秒 —— 它失败了也只是跳过，等待只是白白拖慢整条回放
-    const timeout = step.timeoutMs || (optional ? 2000 : 10000);
+    const timeout = step.timeoutMs || (optional || noCandidates ? 2000 : 10000);
     const deadline = Date.now() + timeout;
 
     let sawElement = false;
@@ -504,12 +535,29 @@
     }
 
     const found = await locate(step);
-    if (!found.element) {
+    let el = found.element;
+
+    // 按键的目标本来就是「当前焦点所在」。自绘编辑器的编辑区常常没有任何稳定标识
+    // （Instagram DM 的 Lexical 编辑区连一条唯一选择器都生成不出来），而前一步的
+    // focus / click 已经把焦点放对了。
+    //
+    // 注意不只是「找不到才退」：只靠深层结构路径命中的元素**很可能是同构的另一条链**，
+    // 按键打到错的元素比没打更糟。所以强候选（测试属性 / id / name / aria）才信任，
+    // 弱命中一律让位给焦点元素。
+    if (KEY_STEPS.has(step.type)) {
+      const weak = !found.via || (found.via.score || 0) < STRONG_SCORE;
+      const active = document.activeElement;
+      if ((!el || weak) && active && active !== document.body) {
+        el = active;
+        found.via = { kind: 'activeElement', value: '当前焦点元素' };
+      }
+    }
+
+    if (!el) {
       // optional 交给 background 决定跳过还是中断 —— 「失败了要不要继续」是回放策略，
       // 页面这层只负责如实报告「这步是什么性质、为什么没做成」
       return { ok: false, error: found.error, optional: OPTIONAL_STEPS.has(step.type) };
     }
-    const el = found.element;
 
     switch (step.type) {
       case 'click':

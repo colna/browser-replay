@@ -129,6 +129,19 @@
       }
     }
 
+    // beforeinput 没人接管：可能是站点把输入事件在捕获阶段吃掉、改由 keydown 自行维护内容
+    // （Instagram DM 实测形态）。逐键敲一遍，内容变了就说明页面自己写进去了 ——
+    // 这类编辑器直写 textContent 只会改到 DOM 这层投影，发送时读的还是空 model。
+    if (value !== '') {
+      const before = el.textContent;
+      for (const ch of value) {
+        fireKey(el, 'keydown', { key: ch });
+        fireKey(el, 'keyup', { key: ch });
+      }
+      await nextFrame();
+      if (el.textContent !== before) return;
+    }
+
     // 普通 contenteditable：没人接管，自己写。派发 input 让框架感知。
     el.textContent = value;
     el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: value }));

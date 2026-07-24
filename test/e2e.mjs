@@ -498,6 +498,59 @@ async function main() {
     const keyReplayed = await evaluate(cdp, sessionId, 'document.getElementById("nickname").value');
     check('逐键回放复现出相同内容（含退格效果）', keyReplayed === 'Coder', keyReplayed);
 
+    // ---------- 无标识编辑器 + 输入事件被吞（Instagram DM 实测形态） ----------
+    log('\n── 无标识编辑器 / 输入事件被吞 ──');
+    const igSelector = '[aria-placeholder="发消息..."]';
+    await evaluate(cdp, sessionId, 'window.__harness.resetIg(); window.__harness.clearSteps()');
+    // 编辑区在页面底部，先滚进视口再开录 —— 否则点击坐标落在视口外，点不到它
+    await evaluate(cdp, sessionId, `document.querySelector('${igSelector}').scrollIntoView({ block: 'center' })`);
+    await sleep(150);
+    await evaluate(cdp, sessionId, 'window.__harness.startRecord()');
+    await sleep(200);
+
+    await realClick(cdp, sessionId, igSelector);
+    await realKeyType(cdp, sessionId, 'hello');
+    await realKey(cdp, sessionId, 'Enter', 'Enter', 13);
+    await sleep(200);
+
+    const igRecorded = await evaluate(cdp, sessionId, 'window.__harness.igLog()');
+    check('录制阶段消息确实发出去了', igRecorded === 'hello', igRecorded);
+
+    const igSteps = await evaluate(cdp, sessionId, 'window.__harness.stopRecord()');
+    const igInputs = igSteps.filter((s) => s.type === 'input');
+    check(
+      '输入事件被吞掉时仍靠 keydown 录到了输入',
+      igInputs.length === 1 && igInputs[0].value === 'hello',
+      igInputs.length ? igInputs.map((s) => JSON.stringify(s.value)).join(' | ') : '(一条 input 步骤都没有)'
+    );
+
+    // 候选归零会让回放连「已尝试了哪些选择器」都打印不出来，用户完全无从判断
+    const emptyCandidateSteps = igSteps.filter((s) => s.target && (s.target.candidates || []).length === 0);
+    check(
+      '无标识元素也至少留下一条候选',
+      emptyCandidateSteps.length === 0,
+      `${emptyCandidateSteps.length} 步零候选：${emptyCandidateSteps.map((s) => s.type).join(', ')}`
+    );
+
+    await evaluate(cdp, sessionId, 'window.__harness.resetIg()');
+    const igReplayLog = await evaluate(cdp, sessionId, `window.__harness.replay(${JSON.stringify(igSteps)})`);
+    const igFailed = igReplayLog.filter((entry) => !entry.ok && !entry.skipped);
+    check(
+      '回放无标识编辑器全部步骤成功',
+      igFailed.length === 0,
+      igFailed.map((f) => `#${f.index} ${f.type}: ${f.error}`).join('; ')
+    );
+    // 编辑区没有任何稳定标识，Enter 必须靠「当前焦点元素」才能打对地方
+    const viaActive = igReplayLog.filter((entry) => entry.via && entry.via.kind === 'activeElement');
+    check(
+      '按键步骤退到了当前焦点元素',
+      viaActive.length > 0,
+      igReplayLog.map((e) => `${e.type}:${e.via ? e.via.kind : '-'}`).join(' ')
+    );
+
+    const igReplayed = await evaluate(cdp, sessionId, 'window.__harness.igLog()');
+    check('回放发出的消息与录制时一致（不是空消息）', igReplayed === igRecorded, `${igReplayed}  (录制时: ${igRecorded})`);
+
     log('\n回放明细：');
     for (const entry of replayLog) {
       const via = entry.via ? `${entry.via.kind}: ${entry.via.value}` : entry.error || '';

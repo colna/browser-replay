@@ -75,6 +75,16 @@
     <h3>已发送</h3>
     <p id="chat-log">-</p>
 
+    <!-- 复刻 Instagram DM（Lexical）实测到的三重故障，缺一条都还原不出「回放发空消息」：
+         1. 编辑区埋在十几层单子节点的无标识 div 里，且同构的链条不止一条 —— 结构路径
+            匹配到多个元素被判非唯一而丢弃，整步候选归零
+         2. beforeinput / input 在 window 捕获阶段被站点吃掉（stopImmediatePropagation），
+            录制器**一条输入事件都收不到**，只剩 keydown 这条通道
+         3. 每次输入重建内部的 <p> —— 结算时手里的旧节点已脱离文档，读不到值 -->
+    <div id="ig-root"></div>
+    <h3>IG 已发送</h3>
+    <p id="ig-log">-</p>
+
     <script>
       // ---- chrome API 桩：让未经改动的 content.js 能原样跑在普通页面里 ----
       const collectedSteps = [];
@@ -180,6 +190,85 @@
         if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
       }
 
+      // ---- IG 风格编辑器：深层无标识 div 汤 + 吞掉输入事件 + 每次输入重建内部节点 ----
+      function buildChain(host, depth) {
+        let node = host;
+        for (let i = 0; i < depth; i += 1) {
+          const div = document.createElement('div');
+          node.appendChild(div);
+          node = div;
+        }
+        return node;
+      }
+
+      const igRoot = document.getElementById('ig-root');
+      // 两条同构的 14 层链：结构路径封顶 12 层后是一串裸 div，两边都匹配 —— 非唯一
+      const igLeaf = buildChain(igRoot, 14);
+      buildChain(igRoot, 14).appendChild(document.createElement('div')); // 同构干扰链
+
+      const igEditor = document.createElement('div');
+      igEditor.setAttribute('contenteditable', 'true');
+      igEditor.setAttribute('role', 'textbox');
+      igEditor.setAttribute('aria-placeholder', '发消息...'); // 白名单外的属性，生成不出候选
+      igEditor.setAttribute('tabindex', '0');
+      // 给它可点的尺寸：默认空 contenteditable 高度为 0，回放取元素中心点会落到别的元素上
+      igEditor.setAttribute('style', 'min-height:28px;min-width:240px;border:1px solid #ccc;padding:4px');
+      igLeaf.appendChild(igEditor);
+
+      const igSent = [];
+      let igModel = '';
+
+      // Lexical 式渲染：每次都换掉内部的 <p>，旧节点随即脱离文档
+      function renderIg() {
+        igEditor.innerHTML = '';
+        const p = document.createElement('p');
+        p.textContent = igModel;
+        igEditor.appendChild(p);
+      }
+      renderIg();
+
+      // 站点在捕获阶段吃掉输入事件 —— 注册早于录制器，stopImmediatePropagation 后它收不到
+      for (const type of ['beforeinput', 'input']) {
+        window.addEventListener(
+          type,
+          (event) => {
+            if (igEditor.contains(event.target) || event.target === igEditor) event.stopImmediatePropagation();
+          },
+          true
+        );
+      }
+
+      // 内容由 keydown 自行维护（浏览器默认插入被上面的吞噬绕过后依然发生，这里统一以 model 为准）
+      igEditor.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          if (!igModel) return; // 空 model 发不出去 —— 没录到输入的回放会卡在这
+          igSent.push(igModel);
+          igModel = '';
+          renderIg();
+          document.getElementById('ig-log').textContent = igSent.join('|');
+          return;
+        }
+        if (event.key === 'Backspace') {
+          event.preventDefault();
+          igModel = igModel.slice(0, -1);
+          renderIg();
+          return;
+        }
+        if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+          event.preventDefault();
+          igModel += event.key;
+          renderIg();
+        }
+      });
+
+      function resetIg() {
+        igModel = '';
+        igSent.length = 0;
+        renderIg();
+        document.getElementById('ig-log').textContent = '-';
+      }
+
       window.__harness = {
         startRecord: () => dispatchToContent({ type: 'BR_START_RECORD' }),
         stopRecord: async () => {
@@ -192,8 +281,10 @@
         },
         reset: resetForm,
         resetChat,
+        resetIg,
         summary: () => document.getElementById('summary').textContent,
         chatLog: () => document.getElementById('chat-log').textContent,
+        igLog: () => document.getElementById('ig-log').textContent,
         // 这里复刻 background 的回放策略：可选步骤（focus/blur/scroll）失败跳过、关键步骤失败中断
         async replay(steps) {
           const log = [];

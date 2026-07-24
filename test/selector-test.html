@@ -65,6 +65,22 @@
       const shadow = host.attachShadow({ mode: 'open' });
       shadow.innerHTML = '<div class="sd-wrap css-sd"><button class="sd-btn css-sd2" data-testid="shadow-btn">影子按钮</button></div>';
 
+      // Instagram DM 那类 div 汤：每层只有一个子节点，nth-of-type 全部退化成裸 tag；
+      // 再放一条同构的干扰链，让 `div > div > … > div` 匹配到多个元素。
+      // 用脚本搭是因为这层数手写不可读，且目标节点必须**一个标识属性都没有**。
+      (() => {
+        const soup = document.createElement('div');
+        soup.id = 'divsoup';
+        document.body.appendChild(soup);
+        const chain = () => {
+          let node = soup.appendChild(document.createElement('div'));
+          for (let i = 0; i < 14; i += 1) node = node.appendChild(document.createElement('div'));
+          return node;
+        };
+        window.__soupTarget = chain();
+        chain(); // 同构干扰链
+      })();
+
       const S = window.__BR_SELECTOR__;
       const results = [];
       const check = (name, fn) => {
@@ -139,6 +155,18 @@
         assert(first.kind === 'structural', `实际是 ${first.kind}`);
         assert(first.value.includes('nth-of-type'), `路径未用 nth-of-type：${first.value}`);
         return first.value;
+      });
+
+      // 5b. 深层 div 汤：每层单子节点 → nth-of-type 全部退化成裸 tag，路径匹配到同构的另一条链。
+      //     这类元素（Instagram DM 的 Lexical 编辑区实测形态）以前会**候选归零**，
+      //     回放不但必然失败，连「已尝试了哪些选择器」都打印不出来。
+      check('深层无标识节点不会候选归零', () => {
+        const el = window.__soupTarget;
+        const candidates = allCandidates(el);
+        assert(candidates.length > 0, '候选为空');
+        const hit = document.querySelectorAll(candidates[0].value);
+        assert(hit.length === 1 && hit[0] === el, `${candidates[0].value} 命中 ${hit.length} 个`);
+        return candidates[0].value;
       });
 
       // 6. 每个候选都必须唯一命中

@@ -75,6 +75,17 @@
   }
 
   /** 单层结构定位：tag + nth-of-type（同 tag 兄弟多于一个时才加序号） */
+  /**
+   * 逐层强制标号。`nthOfType` 在「同标签兄弟只有一个」时退化成裸 tag，
+   * 碰上 Instagram 这种每层单个 div 的深嵌套，整条路径会变成 `div > div > … > div`，
+   * 匹配上千个元素而被当作不唯一丢弃。加上 nth-child 才能把它们区分开。
+   */
+  function nthChild(el) {
+    const parent = el.parentElement;
+    if (!parent) return tagOf(el);
+    return `${tagOf(el)}:nth-child(${Array.prototype.indexOf.call(parent.children, el) + 1})`;
+  }
+
   function nthOfType(el) {
     const tag = tagOf(el);
     const parent = el.parentElement;
@@ -111,12 +122,15 @@
    * 结构路径。从目标往上走，遇到带锚点的祖先就停 —— 路径越短越抗改版。
    * 全程只用 tag:nth-of-type，绝不引入 class。
    */
-  function structuralPath(el, root) {
+  function structuralPath(el, root, useNthChild = false) {
     const parts = [];
     let node = el;
     let depth = 0;
+    // 常规路径封顶 12 层 —— 越长越脆，宁可短一点。但加强版是「短路径已经不唯一」时的最后手段，
+    // 半截相对路径（`div > div > … > div`）会匹配到成百上千个元素，还不如一路走到锚点/根。
+    const maxDepth = useNthChild ? 30 : 12;
 
-    while (node && node.nodeType === Node.ELEMENT_NODE && depth < 12) {
+    while (node && node.nodeType === Node.ELEMENT_NODE && depth < maxDepth) {
       if (depth > 0) {
         const anchor = selfAnchor(node, root);
         if (anchor) {
@@ -124,7 +138,7 @@
           return parts.join(' > ');
         }
       }
-      parts.unshift(nthOfType(node));
+      parts.unshift(useNthChild ? nthChild(node) : nthOfType(node));
 
       const parent = node.parentElement;
       if (!parent) break;
@@ -157,10 +171,11 @@
     const seen = new Set();
 
     const push = (kind, value, score, needUnique = true) => {
-      if (!value || seen.has(value)) return;
-      if (needUnique && !isUniqueIn(root, value, el)) return;
+      if (!value || seen.has(value)) return false;
+      if (needUnique && !isUniqueIn(root, value, el)) return false;
       seen.add(value);
       out.push({ kind, value, score });
+      return true;
     };
 
     // 1. 测试属性 —— 专为自动化而设，最稳
@@ -201,8 +216,16 @@
       push('attr', `${tag}[type="${escapeAttrValue(typeAttr)}"][name="${escapeAttrValue(name)}"]`, 76);
     }
 
-    // 6. 结构路径 —— 一定能生成，作为 CSS 类候选的保底
-    push('structural', structuralPath(el, root), 40);
+    // 6. 结构路径 —— 保底候选。nth-of-type 更抗兄弟增删，优先；它不唯一时才退到 nth-child。
+    const looseePath = structuralPath(el, root);
+    const strictPath = structuralPath(el, root, true);
+    const gotStructural = push('structural', looseePath, 40) || push('structural', strictPath, 36);
+
+    // 两条都不唯一、且此前一个候选都没攒到：宁可留一条可能选错的，也好过零候选。
+    // 候选为空时回放不但必然失败，连「已尝试了哪些选择器」都打印不出来，用户根本无从判断。
+    if (!gotStructural && out.length === 0 && (strictPath || looseePath)) {
+      out.push({ kind: 'structural', value: strictPath || looseePath, score: 20 });
+    }
 
     out.sort((a, b) => b.score - a.score);
     return out;
