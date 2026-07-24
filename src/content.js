@@ -278,8 +278,14 @@
     const el = event.target;
     if (!el || isOwnUI(el) || el === document.body) return;
     if (!isMeaningfulFocus(el)) return;
-    // 以聚焦时的内容为基线，之后只有真的变了才记 input
-    recordedValues.set(el, readValue(el));
+    // 以聚焦时的内容为基线，之后只有真的变了才记 input。
+    //
+    // 但自绘编辑器不吃这条：编辑区里的内容**就是接下来要被发出去的东西**，
+    // 而它可能在聚焦前就已经在那儿了（Instagram DM 会恢复草稿）。把它当作「已知值」
+    // 等于认定「这不用记」—— 录出来的脚本里一条 input 都没有，回放时输入框是空的，
+    // 消息根本发不出去，而且每一步都显示成功，最难查。
+    // 表单字段不同：预填值大量存在，且用户只是路过（Tab 键扫过）不该产出一堆步骤。
+    recordedValues.set(el, el.isContentEditable ? '' : readValue(el));
     // 逐键元素：以聚焦时的值与光标作为影子缓冲基线
     if (isPerKeyTarget(el)) keyBuffer.set(el, KB.snapshot(el));
     emit({ type: 'focus', target: describeTarget(el), sinceLastMs: sinceLast() });

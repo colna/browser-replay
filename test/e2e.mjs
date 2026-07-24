@@ -573,6 +573,40 @@ async function main() {
     const blindSent = await evaluate(cdp, sessionId, 'window.__harness.igLog()');
     check('零候选兜底后消息照样发得出去', blindSent === 'hello', blindSent);
 
+    // ---------- 站点恢复草稿：录制开始前编辑区里就有内容 ----------
+    // Instagram DM 会恢复草稿。以聚焦那刻的内容为基线，就等于认定「这不用记」——
+    // 录出来一条 input 都没有、每步都显示成功，回放时却在空输入框上点发送。
+    log('\n── 编辑区预存草稿 ──');
+    await evaluate(cdp, sessionId, 'window.__harness.seedIgDraft("666"); window.__harness.clearSteps()');
+    await evaluate(cdp, sessionId, 'window.__harness.startRecord()');
+    await sleep(200);
+
+    await realClick(cdp, sessionId, igSelector); // 聚焦，但一个字都不打
+    await realClick(cdp, sessionId, '[aria-label="发送"]');
+    await sleep(200);
+
+    const draftSent = await evaluate(cdp, sessionId, 'window.__harness.igLog()');
+    check('录制阶段草稿确实被发出去了', draftSent === '666', draftSent);
+
+    const draftSteps = await evaluate(cdp, sessionId, 'window.__harness.stopRecord()');
+    const draftInputs = draftSteps.filter((s) => s.type === 'input');
+    check(
+      '聚焦前就存在的内容也被录进来了',
+      draftInputs.length === 1 && draftInputs[0].value === '666',
+      draftInputs.length ? draftInputs.map((s) => JSON.stringify(s.value)).join(' | ') : '(一条 input 步骤都没有)'
+    );
+
+    await evaluate(cdp, sessionId, 'window.__harness.resetIg()'); // 回放从空编辑区开始
+    const draftLog = await evaluate(cdp, sessionId, `window.__harness.replay(${JSON.stringify(draftSteps)})`);
+    const draftFailed = draftLog.filter((entry) => !entry.ok && !entry.skipped);
+    check(
+      '回放预存草稿场景全部步骤成功',
+      draftFailed.length === 0,
+      draftFailed.map((f) => `#${f.index} ${f.type}: ${f.error}`).join('; ')
+    );
+    const draftReplayed = await evaluate(cdp, sessionId, 'window.__harness.igLog()');
+    check('空编辑区回放也发得出同样的消息', draftReplayed === '666', `${draftReplayed}  (录制时: ${draftSent})`);
+
     log('\n回放明细：');
     for (const entry of replayLog) {
       const via = entry.via ? `${entry.via.kind}: ${entry.via.value}` : entry.error || '';

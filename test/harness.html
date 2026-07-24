@@ -215,6 +215,15 @@
       igEditor.setAttribute('style', 'min-height:28px;min-width:240px;border:1px solid #ccc;padding:4px');
       igLeaf.appendChild(igEditor);
 
+      // 发送按钮：真实场景里用户多半点它而不是按回车，两条路都要能录到输入
+      const igSendBtn = document.createElement('div');
+      igSendBtn.setAttribute('role', 'button');
+      igSendBtn.setAttribute('aria-label', '发送');
+      igSendBtn.setAttribute('style', 'min-height:24px;min-width:60px;border:1px solid #ccc');
+      igSendBtn.textContent = 'Send';
+      igLeaf.appendChild(igSendBtn);
+      igSendBtn.addEventListener('click', () => sendIg());
+
       const igSent = [];
       let igModel = '';
 
@@ -242,11 +251,7 @@
       igEditor.addEventListener('keydown', (event) => {
         if (event.key === 'Enter') {
           event.preventDefault();
-          if (!igModel) return; // 空 model 发不出去 —— 没录到输入的回放会卡在这
-          igSent.push(igModel);
-          igModel = '';
-          renderIg();
-          document.getElementById('ig-log').textContent = igSent.join('|');
+          sendIg(); // 空 model 发不出去 —— 没录到输入的回放会卡在这
           return;
         }
         if (event.key === 'Backspace') {
@@ -262,11 +267,24 @@
         }
       });
 
-      function resetIg() {
-        igModel = '';
+      function resetIg(draft) {
+        igModel = draft || '';
         igSent.length = 0;
         renderIg();
         document.getElementById('ig-log').textContent = '-';
+      }
+
+      // 复刻「站点恢复草稿」：录制开始前编辑区里就已经有内容了
+      function seedIgDraft(text) {
+        resetIg(text);
+      }
+
+      function sendIg() {
+        if (!igModel) return;
+        igSent.push(igModel);
+        igModel = '';
+        renderIg();
+        document.getElementById('ig-log').textContent = igSent.join('|');
       }
 
       window.__harness = {
@@ -282,6 +300,7 @@
         reset: resetForm,
         resetChat,
         resetIg,
+        seedIgDraft,
         summary: () => document.getElementById('summary').textContent,
         chatLog: () => document.getElementById('chat-log').textContent,
         igLog: () => document.getElementById('ig-log').textContent,
