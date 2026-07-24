@@ -11,6 +11,7 @@
   const SELECTOR = window.__BR_SELECTOR__;
   const WAITER = window.__BR_WAITER__;
   const EXECUTOR = window.__BR_EXECUTOR__;
+  const KB = window.__BR_KEYBOARD__;
 
   const HUD_ID = '__browser_replay_hud__';
   const isTopFrame = window.top === window;
@@ -19,6 +20,14 @@
   let lastEventAt = 0;
   /** 未提交的输入（连续按键要合并成一步，否则一行文字会产出几十条记录） */
   let pendingInput = null;
+  /** 正在 IME 组字的元素 —— 组字期间不逐键记录，提交文本在 compositionend 一次落 */
+  const composing = new WeakSet();
+  /**
+   * 逐键元素的「影子缓冲」{value,start,end}：每记一个键就用同一套文本模型推进一次。
+   * blur 时拿它和输入框真实值对比 —— 一致说明内容全由键盘产生（无需值快照），
+   * 不一致说明键盘之外还改过（粘贴 / 表情 / 自动填充 / 程序塞值），补一步值快照兜底。
+   */
+  const keyBuffer = new WeakMap();
   /** 仅用于「刚才那一步是什么」的去重判断，不是回放进度 —— 进度永远只属于 background */
   let lastEmitted = { type: null, at: 0 };
 
@@ -59,6 +68,17 @@
     if (el.type === 'password') return true;
     const name = `${el.name || ''} ${el.id || ''} ${el.getAttribute('autocomplete') || ''}`.toLowerCase();
     return /password|passwd|otp|cvv|card-?number|secret|token/.test(name);
+  }
+
+  // 只有「选区安全」的文本输入才逐键：能读写 selectionStart/End，回放才能按键在正确位置增删。
+  // number / email / date 等类型访问选区会抛错或返回 null；contenteditable 是自绘编辑器地盘 ——
+  // 这些一律走值快照兜底，不逐键。
+  const PER_KEY_INPUT_TYPES = new Set(['text', 'search', 'tel', 'url']);
+  function isPerKeyTarget(el) {
+    if (!el || el.isContentEditable || isSensitive(el)) return false;
+    if (el.tagName === 'TEXTAREA') return true;
+    if (el.tagName !== 'INPUT') return false;
+    return PER_KEY_INPUT_TYPES.has((el.type || 'text').toLowerCase());
   }
 
   // ------------------------------------------------------------------ 录制
@@ -116,6 +136,9 @@
   function markPendingInput(el) {
     if (!el || isOwnUI(el)) return;
     if (!canRecordValue(el)) return;
+    // 逐键元素的输入由 keystroke 步骤逐个记，不再走值快照这条路（避免同一次输入记两遍、回放打两遍）。
+    // 键盘之外的改动（粘贴 / 表情 / IME 提交）另有 blur 兜底与 compositionend 处理。
+    if (isPerKeyTarget(el)) return;
 
     // 换了元素就把上一个元素的输入结算掉，保证顺序正确
     if (pendingInput && pendingInput.element !== el) flushPendingInput();
@@ -236,6 +259,8 @@
     if (!isMeaningfulFocus(el)) return;
     // 以聚焦时的内容为基线，之后只有真的变了才记 input
     recordedValues.set(el, readValue(el));
+    // 逐键元素：以聚焦时的值与光标作为影子缓冲基线
+    if (isPerKeyTarget(el)) keyBuffer.set(el, KB.snapshot(el));
     emit({ type: 'focus', target: SELECTOR.describe(el), sinceLastMs: sinceLast() });
   }
 
@@ -245,9 +270,14 @@
     // 输入必须在失焦前结算，否则回放顺序会变成「先失焦再填值」
     if (pendingInput && pendingInput.element === el) flushPendingInput();
     if (!isMeaningfulFocus(el)) return;
-    // 兜底：连 beforeinput 都没派发过（表情面板、粘贴按钮这类纯 JS 塞值），
-    // 但内容确实变了 —— 不补这一步，回放出来就是个空框
-    emitInputFor(el);
+    if (isPerKeyTarget(el)) {
+      // 逐键元素：只在键盘之外还改过内容时才补值快照
+      reconcilePerKey(el);
+    } else {
+      // 兜底：连 beforeinput 都没派发过（表情面板、粘贴按钮这类纯 JS 塞值），
+      // 但内容确实变了 —— 不补这一步，回放出来就是个空框
+      emitInputFor(el);
+    }
     emit({ type: 'blur', target: SELECTOR.describe(el), sinceLastMs: sinceLast() });
   }
 
@@ -256,12 +286,50 @@
     'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'
   ]);
 
+  function ensureKeyBuffer(el) {
+    if (!keyBuffer.has(el)) keyBuffer.set(el, KB.snapshot(el));
+  }
+
+  /**
+   * 逐键记录一个键。返回 true 表示这一键已按「逐键」记下、调用方不该再走通用按键逻辑。
+   *
+   * 只处理选区安全文本框上的可打印字符、编辑键（退格/删除/左右/Home/End）、以及多行 Enter（换行）。
+   * 单行 Enter、Tab、Escape、方向上下等交给通用按键逻辑（它们要么触发提交/跳焦、要么不改文本值）。
+   */
+  function recordKeystroke(el, event) {
+    const key = event.key;
+    const multiline = el.tagName === 'TEXTAREA';
+    if (!KB.isKeystrokeKey(key, multiline)) return false;
+
+    ensureKeyBuffer(el);
+    const step = {
+      type: 'keystroke',
+      target: SELECTOR.describe(el),
+      key,
+      code: event.code,
+      shiftKey: event.shiftKey,
+      sinceLastMs: sinceLast()
+    };
+    if (key.length === 1) step.char = key;
+    if (key === 'Enter' && multiline) step.multiline = true;
+
+    keyBuffer.set(el, KB.applyKeystroke(keyBuffer.get(el), step));
+    emit(step);
+    return true;
+  }
+
   function onKeyDown(event) {
     const el = event.target;
     if (!el || isOwnUI(el)) return;
 
     const isCombo = event.ctrlKey || event.metaKey || event.altKey;
-    if (!FUNCTIONAL_KEYS.has(event.key) && !isCombo) return; // 普通字符由 input 覆盖
+
+    // 逐键路径：选区安全的文本输入，且非 IME 组字、非组合键（Ctrl/Cmd/Alt 快捷键仍按功能键记）
+    if (isPerKeyTarget(el) && !event.isComposing && !composing.has(el) && !isCombo) {
+      if (recordKeystroke(el, event)) return;
+    }
+
+    if (!FUNCTIONAL_KEYS.has(event.key) && !isCombo) return; // 普通字符由 input / keystroke 覆盖
 
     if (event.key === 'Enter' || event.key === 'Tab') flushPendingInput();
 
@@ -276,6 +344,38 @@
       metaKey: event.metaKey,
       sinceLastMs: sinceLast()
     });
+  }
+
+  function onCompositionStart(event) {
+    const el = event.target;
+    if (!el || isOwnUI(el)) return;
+    composing.add(el);
+  }
+
+  // IME 组字提交：拼音等无法逐键还原，把提交文本作为一步 keystroke（整段插入）记下。
+  function onCompositionEnd(event) {
+    const el = event.target;
+    if (!el || isOwnUI(el)) return;
+    composing.delete(el);
+    if (!recording || !isPerKeyTarget(el)) return;
+
+    const text = event.data || '';
+    if (!text) return;
+    ensureKeyBuffer(el);
+    const step = { type: 'keystroke', target: SELECTOR.describe(el), text, ime: true, sinceLastMs: sinceLast() };
+    keyBuffer.set(el, KB.applyKeystroke(keyBuffer.get(el), step));
+    emit(step);
+  }
+
+  /**
+   * 逐键元素失焦时结算：影子缓冲和真实值一致就什么都不补（内容全由已记的键产生）；
+   * 不一致说明键盘之外还动过内容（粘贴 / 表情面板 / 自动填充 / insertText / 光标被鼠标挪过后编辑），
+   * 补一步值快照 —— 回放时它会把整框覆盖成真实终值，兜住逐键没能精确复现的情况。
+   */
+  function reconcilePerKey(el) {
+    const buf = keyBuffer.get(el);
+    keyBuffer.delete(el);
+    if (!buf || buf.value !== readValue(el)) emitInputFor(el);
   }
 
   function onSubmit(event) {
@@ -308,6 +408,8 @@
     ['focusin', onFocusIn],
     ['focusout', onFocusOut],
     ['keydown', onKeyDown],
+    ['compositionstart', onCompositionStart],
+    ['compositionend', onCompositionEnd],
     ['submit', onSubmit],
     ['scroll', onScroll]
   ];
@@ -431,6 +533,9 @@
         break;
       case 'key':
         EXECUTOR.key(el, step);
+        break;
+      case 'keystroke':
+        EXECUTOR.keystroke(el, step);
         break;
       case 'submit':
         if (typeof el.requestSubmit === 'function') el.requestSubmit();

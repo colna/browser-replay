@@ -11,6 +11,7 @@ import { toExport } from './lib/export.js';
 const CONTENT_FILES = [
   'src/lib/selector.js',
   'src/lib/waiter.js',
+  'src/lib/keyboard.js',
   'src/lib/executor.js',
   'src/content.js'
 ];
@@ -301,7 +302,8 @@ async function runReplay({ scriptId, tabId, fromIndex = 0, stepDelayMs = 300 }) 
     }
 
     await patchPlayState({ cursor: i + 1, log });
-    if (stepDelayMs) await sleep(stepDelayMs);
+    // 逐键步骤天然密集，用整套 300ms 间隔会让打一行字慢到几秒；给它一个很短的间隔就够。
+    if (stepDelayMs) await sleep(step.type === 'keystroke' ? Math.min(stepDelayMs, 40) : stepDelayMs);
   }
 
   const finalState = await getPlayState();

@@ -165,6 +165,7 @@ const TYPE_LABEL = {
   focus: '聚焦',
   blur: '失焦',
   key: '按键',
+  keystroke: '击键',
   submit: '提交',
   scroll: '滚动'
 };
@@ -213,6 +214,10 @@ function renderSteps(script) {
     } else if (step.checked !== undefined) {
       valueEl.hidden = false;
       valueEl.textContent = `勾选：${step.checked}`;
+    } else if (step.type === 'keystroke') {
+      valueEl.hidden = false;
+      const label = step.ime ? `输入「${step.text}」` : step.char != null ? `字符「${step.char}」` : step.key;
+      valueEl.textContent = `击键：${label}`;
     } else if (step.key) {
       valueEl.hidden = false;
       valueEl.textContent = `按键：${step.key}`;

@@ -23,6 +23,7 @@
       "js": [
         "src/lib/selector.js",
         "src/lib/waiter.js",
+        "src/lib/keyboard.js",
         "src/lib/executor.js",
         "src/content.js"
       ]

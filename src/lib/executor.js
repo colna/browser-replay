@@ -10,6 +10,7 @@
   if (window.__BR_EXECUTOR__) return;
 
   const { sleep, nextFrame } = window.__BR_WAITER__;
+  const KB = window.__BR_KEYBOARD__;
 
   /**
    * React / Vue 会劫持 value 的 setter 来做受控绑定，
@@ -173,25 +174,81 @@
     el.dispatchEvent(new FocusEvent('focusout', { bubbles: true, composed: true }));
   }
 
+  function fireKey(target, phase, descriptor) {
+    target.dispatchEvent(
+      new KeyboardEvent(phase, {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        key: descriptor.key,
+        code: descriptor.code || '',
+        ctrlKey: !!descriptor.ctrlKey,
+        shiftKey: !!descriptor.shiftKey,
+        altKey: !!descriptor.altKey,
+        metaKey: !!descriptor.metaKey
+      })
+    );
+  }
+
   function key(el, descriptor) {
     const target = el || document.activeElement || document.body;
-    const init = {
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-      key: descriptor.key,
-      code: descriptor.code || '',
-      ctrlKey: !!descriptor.ctrlKey,
-      shiftKey: !!descriptor.shiftKey,
-      altKey: !!descriptor.altKey,
-      metaKey: !!descriptor.metaKey
-    };
-    target.dispatchEvent(new KeyboardEvent('keydown', init));
-    target.dispatchEvent(new KeyboardEvent('keyup', init));
+    fireKey(target, 'keydown', descriptor);
+    fireKey(target, 'keyup', descriptor);
 
     // Enter 在原生表单里默认会提交，合成事件不会 —— 显式补上
     if (descriptor.key === 'Enter' && target.form && typeof target.form.requestSubmit === 'function') {
       target.form.requestSubmit();
+    }
+  }
+
+  /**
+   * 逐键回放：还原一次真实按键对文本输入框的完整效果。
+   *
+   * 合成 `keydown` 本身**不会**往输入框里落字符（那是浏览器对可信事件的默认行为，合成事件没有）。
+   * 所以这里先发 keydown 给页面的键盘 handler 一个响应机会，再用纯文本模型算出这一键之后的
+   * value 与光标，走原生 setter 写回并补 `beforeinput` / `input`，让 React 等受控组件感知，最后发 keyup。
+   */
+  function keystroke(el, step) {
+    if (typeof el.focus === 'function') el.focus({ preventScroll: true });
+
+    const before = KB.snapshot(el);
+    const after = KB.applyKeystroke(before, step);
+    const data = KB.insertionOf(step);
+
+    fireKey(el, 'keydown', step);
+
+    if (after.value !== before.value) {
+      const inputType = data != null
+        ? (step.ime ? 'insertFromComposition' : 'insertText')
+        : step.key === 'Backspace'
+          ? 'deleteContentBackward'
+          : step.key === 'Delete'
+            ? 'deleteContentForward'
+            : 'insertText';
+      el.dispatchEvent(
+        new InputEvent('beforeinput', { bubbles: true, cancelable: true, composed: true, inputType, data })
+      );
+      setNativeValue(el, after.value);
+      try {
+        el.setSelectionRange(after.start, after.end);
+      } catch {
+        /* 部分输入类型不支持设选区，忽略即可 */
+      }
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, inputType, data }));
+    } else {
+      // 纯光标移动：值没变，只挪选区
+      try {
+        el.setSelectionRange(after.start, after.end);
+      } catch {
+        /* 同上 */
+      }
+    }
+
+    fireKey(el, 'keyup', step);
+
+    // 单行 Enter 走到这里说明是提交语义（多行 Enter 已作为换行插入了）
+    if (step.key === 'Enter' && !step.multiline && el.form && typeof el.form.requestSubmit === 'function') {
+      el.form.requestSubmit();
     }
   }
 
@@ -208,5 +265,5 @@
     await sleep(50);
   }
 
-  window.__BR_EXECUTOR__ = { click, type, setChecked, select, focus, blur, key, scroll, setNativeValue };
+  window.__BR_EXECUTOR__ = { click, type, setChecked, select, focus, blur, key, keystroke, scroll, setNativeValue };
 })();

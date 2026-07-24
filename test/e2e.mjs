@@ -146,10 +146,26 @@ async function realClick(cdp, sessionId, selector) {
   await sleep(120);
 }
 
-/** 真实键盘输入 */
+/** 真实键盘输入（一次性插入，等价于 IME 提交 / 粘贴，不产生逐个 keydown） */
 async function realType(cdp, sessionId, text) {
   await cdp.send('Input.insertText', { text }, sessionId);
   await sleep(150);
+}
+
+/** 真实逐键输入：每个字符发一对 keyDown(带 text)/keyUp，产生真正的 keydown 事件 */
+async function realKeyType(cdp, sessionId, text) {
+  for (const ch of text) {
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ch, text: ch }, sessionId);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ch }, sessionId);
+    await sleep(20);
+  }
+}
+
+/** 真实敲一个功能键（退格 / 方向等） */
+async function realKey(cdp, sessionId, key, code, keyCode) {
+  await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode: keyCode }, sessionId);
+  await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode: keyCode }, sessionId);
+  await sleep(20);
 }
 
 async function waitFor(fn, label, timeout = 15000) {
@@ -433,6 +449,54 @@ async function main() {
 
     const chatReplayed = await evaluate(cdp, sessionId, 'window.__harness.chatLog()');
     check('回放发出的消息与录制时逐字一致', chatReplayed === chatRecorded, `${chatReplayed}  (录制时: ${chatRecorded})`);
+
+    // ---------- 逐键录制 / 回放 ----------
+    // 用真实逐个 keydown 打字 + 退格，验证：普通文本框逐键成 keystroke 步骤、无冗余值快照、回放逐键复现
+    log('\n── 逐键录制 / 回放 ──');
+    await evaluate(cdp, sessionId, 'window.__harness.reset(); window.__harness.clearSteps()');
+    await evaluate(cdp, sessionId, 'window.__harness.startRecord()');
+    await sleep(200);
+
+    await realClick(cdp, sessionId, '#nickname');
+    await realKeyType(cdp, sessionId, 'Codex');
+    await realKey(cdp, sessionId, 'Backspace', 'Backspace', 8); // Codex → Code
+    await realKeyType(cdp, sessionId, 'r'); // Code → Coder
+    await realClick(cdp, sessionId, '#remark'); // 失焦结算
+    await sleep(150);
+
+    const keyRecorded = await evaluate(cdp, sessionId, 'document.getElementById("nickname").value');
+    check('逐键录制阶段输入框内容正确', keyRecorded === 'Coder', keyRecorded);
+
+    const keySteps = await evaluate(cdp, sessionId, 'window.__harness.stopRecord()');
+    const keystrokeSteps = keySteps.filter((s) => s.type === 'keystroke');
+    check(
+      '普通文本框被逐键录制',
+      keystrokeSteps.length === 7, // C o d e x  Backspace  r
+      `${keystrokeSteps.length} 个 keystroke：${keystrokeSteps.map((s) => s.char || s.key).join(' ')}`
+    );
+    check(
+      '退格键作为编辑键被录进来',
+      keystrokeSteps.some((s) => s.key === 'Backspace'),
+      keystrokeSteps.map((s) => s.key).join(' ')
+    );
+    // 内容全由键盘产生 → blur 不该再补一步冗余的值快照
+    const nickInputSteps = keySteps.filter((s) => s.type === 'input' && s.target && s.target.tag === 'input');
+    check(
+      '逐键内容不再重复记成值快照',
+      nickInputSteps.length === 0,
+      `多出 ${nickInputSteps.length} 步 input`
+    );
+
+    await evaluate(cdp, sessionId, 'window.__harness.reset()');
+    const keyReplayLog = await evaluate(cdp, sessionId, `window.__harness.replay(${JSON.stringify(keySteps)})`);
+    const keyFailed = keyReplayLog.filter((entry) => !entry.ok && !entry.skipped);
+    check(
+      '逐键回放全部步骤成功',
+      keyFailed.length === 0,
+      keyFailed.map((f) => `#${f.index} ${f.type}: ${f.error}`).join('; ')
+    );
+    const keyReplayed = await evaluate(cdp, sessionId, 'document.getElementById("nickname").value');
+    check('逐键回放复现出相同内容（含退格效果）', keyReplayed === 'Coder', keyReplayed);
 
     log('\n回放明细：');
     for (const entry of replayLog) {

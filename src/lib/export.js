@@ -31,6 +31,10 @@ export function toExport(script) {
       if (step.masked) out.masked = true;
       if (step.checked !== undefined) out.checked = step.checked;
       if (step.key) out.key = step.key;
+      if (step.char !== undefined) out.char = step.char;
+      if (step.text !== undefined) out.text = step.text;
+      if (step.ime) out.ime = true;
+      if (step.multiline) out.multiline = true;
       if (step.type === 'scroll') {
         out.scrollX = step.scrollX;
         out.scrollY = step.scrollY;
