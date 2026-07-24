@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Browser Replay",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "录制浏览器操作（点击 / 输入 / 聚焦等）并回放，可导出 JSON。选择器不使用 class。",
   "permissions": [
     "storage",

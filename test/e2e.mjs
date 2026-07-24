@@ -607,6 +607,37 @@ async function main() {
     const draftReplayed = await evaluate(cdp, sessionId, 'window.__harness.igLog()');
     check('空编辑区回放也发得出同样的消息', draftReplayed === '666', `${draftReplayed}  (录制时: ${draftSent})`);
 
+    // ---------- 同一位置换了个按钮：必须失败，不能点下去 ----------
+    // Instagram 的发送按钮在输入框为空时原地变成麦克风。语义候选匹配不上后退到结构路径，
+    // 按位置就命中了麦克风 —— 实测把「回放」变成了「开始录音」。
+    // 找不到只是这一步失败；点错却是执行了另一个动作，代价高得多。
+    log('\n── 同位置异按钮（发送 → 麦克风） ──');
+    await evaluate(cdp, sessionId, 'window.__harness.resetIg(); window.__harness.swapIgSendToMic()');
+
+    const sendStep = draftSteps.find((s) => s.type === 'click' && s.target && s.target.hints && s.target.hints.ariaLabel === '发送');
+    check('取到了录制时的发送按钮步骤', !!sendStep, sendStep ? sendStep.target.candidates[0].value : '(没找到)');
+
+    // 只保留「已失效的语义候选 + 仍能按位置命中的结构路径」，还原线上那一刻的候选状态
+    const misfire = {
+      ...sendStep,
+      timeoutMs: 600,
+      target: {
+        ...sendStep.target,
+        candidates: [
+          { kind: 'aria', value: 'div[aria-label="发送"]', score: 80 },
+          { kind: 'structural', value: '#ig-root [role="button"]', score: 40 }
+        ]
+      }
+    };
+    const misfireLog = await evaluate(cdp, sessionId, `window.__harness.replay(${JSON.stringify([misfire])})`);
+    check(
+      '语义对不上时不拿结构路径硬点',
+      !misfireLog[0].ok,
+      misfireLog[0].ok ? `点到了 ${misfireLog[0].via && misfireLog[0].via.value}` : misfireLog[0].error
+    );
+    const micLog = await evaluate(cdp, sessionId, 'window.__harness.igLog()');
+    check('没有误触发录音', micLog !== '录音中', micLog);
+
     log('\n回放明细：');
     for (const entry of replayLog) {
       const via = entry.via ? `${entry.via.kind}: ${entry.via.value}` : entry.error || '';

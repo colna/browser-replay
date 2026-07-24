@@ -3,9 +3,11 @@
  * 一是它是对外契约（别的工具会消费这份 JSON），跟内部存储结构解耦；
  * 二是 service worker 里的代码没法直接跑测试，抽出来才能在 node 里断言。
  */
-export function toExport(script) {
+export function toExport(script, extVersion) {
   return {
     format: 'browser-replay@1',
+    // 录制是哪个版本产出的 —— 排查线上录制时，第一件事就是确认页面里跑的到底是不是新代码
+    extVersion,
     id: script.id,
     name: script.name,
     startUrl: script.startUrl,

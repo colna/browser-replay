@@ -426,7 +426,7 @@ const HANDLERS = {
   async BR_EXPORT(message) {
     const script = await getScript(message.scriptId);
     if (!script) return { ok: false };
-    return { ok: true, data: toExport(script) };
+    return { ok: true, data: toExport(script, chrome.runtime.getManifest().version) };
   },
 
   async BR_IMPORT(message) {

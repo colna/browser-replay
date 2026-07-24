@@ -564,13 +564,14 @@
       return { element: byHint, via: { kind: 'hint', value: JSON.stringify(target.hints), score: HINT_SCORE } };
     }
 
+    // 结构路径必须过「像不像」这一关，不像就当作没找到 —— 没有「都不像就退回第一个」这条后路。
+    //
+    // 实测代价：Instagram 的发送按钮在输入框为空时会变成麦克风，位置一模一样。
+    // 语义候选（aria-label="发送"）匹配不上后退到结构路径，按位置命中麦克风，
+    // 于是「回放」变成了「开始录音」。找不到只是这一步失败，点错却是执行了另一个动作 ——
+    // 后者的代价高得多，宁可停下来报错。
     const weak = candidates.filter((c) => c.score < HINT_SCORE);
-    // 结构路径必须过一遍「像不像」，实在没有像的再退回不校验的第一个匹配 ——
-    // 校验只是排序偏好，不该把「有点东西」变成「什么都没有」
-    return (
-      tryCandidates(root, weak, target, true) ||
-      tryCandidates(root, weak, target) || { element: null, via: null }
-    );
+    return tryCandidates(root, weak, target, true) || { element: null, via: null };
   }
 
   window.__BR_SELECTOR__ = { describe, resolve, buildCandidates, isUnstableId, buildAncestors };

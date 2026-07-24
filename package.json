@@ -1,6 +1,6 @@
 {
   "name": "browser-replay",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "录制浏览器操作并回放的 Chrome 扩展（MV3），可导出 JSON，选择器不使用 class",

@@ -222,7 +222,16 @@
       igSendBtn.setAttribute('style', 'min-height:24px;min-width:60px;border:1px solid #ccc');
       igSendBtn.textContent = 'Send';
       igLeaf.appendChild(igSendBtn);
-      igSendBtn.addEventListener('click', () => sendIg());
+      igSendBtn.addEventListener('click', () => {
+        if (igSendBtn.getAttribute('aria-label') === '发送') sendIg();
+        else document.getElementById('ig-log').textContent = '录音中'; // 点错按钮的后果要看得见
+      });
+
+      // 复刻 Instagram：输入框为空时，发送按钮原地变成麦克风 —— 位置一样，语义完全不同
+      function swapIgSendToMic() {
+        igSendBtn.setAttribute('aria-label', '录制语音消息');
+        igSendBtn.textContent = 'Mic';
+      }
 
       const igSent = [];
       let igModel = '';
@@ -301,6 +310,7 @@
         resetChat,
         resetIg,
         seedIgDraft,
+        swapIgSendToMic,
         summary: () => document.getElementById('summary').textContent,
         chatLog: () => document.getElementById('chat-log').textContent,
         igLog: () => document.getElementById('ig-log').textContent,
