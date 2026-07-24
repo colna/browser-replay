@@ -20,10 +20,65 @@
     'data-track-id'
   ];
 
-  // 这些属性值本身就是内容语义，适合做定位
-  const SEMANTIC_ATTRS = ['name', 'aria-label', 'placeholder', 'title', 'alt', 'href', 'type', 'role'];
+  // 这些属性值本身就是内容语义，适合做定位。
+  // 判据是「它描述这个元素**是什么**」——`aria-placeholder` / `contenteditable` 同样满足，
+  // 而 Instagram DM 的编辑区身上恰好只有这类属性，漏掉它们就只能退到结构路径。
+  const SEMANTIC_ATTRS = [
+    'name',
+    'aria-label',
+    'aria-placeholder',
+    'placeholder',
+    'title',
+    'alt',
+    'href',
+    'type',
+    'role',
+    'contenteditable'
+  ];
+
+  /**
+   * 描述「现在处于什么状态」的属性，绝不能进选择器 —— 它们随交互变化，
+   * 录制时 `aria-expanded="true"`，回放时菜单还没展开就永远匹配不上。
+   * （祖先快照里仍然记录它们：那是给人看状态用的，和定位是两回事。）
+   */
+  const STATE_ATTRS = new Set([
+    'aria-expanded',
+    'aria-selected',
+    'aria-checked',
+    'aria-pressed',
+    'aria-current',
+    'aria-hidden',
+    'aria-busy',
+    'aria-disabled',
+    'aria-describedby',
+    'aria-labelledby',
+    'disabled',
+    'checked',
+    'open',
+    'hidden',
+    'data-state',
+    'data-focus-visible-added'
+  ]);
 
   const MAX_TEXT_LEN = 60;
+
+  /**
+   * 站点自定义的 `data-*` 标记（Instagram 的 `data-pagelet`、各家的 `data-module` 等）
+   * 常常是页面里最稳的东西 —— 它是给自家代码用的，不随视觉改版而变。
+   * 但值必须稳定：`data-auto-logging-id="fb1157e97"` 这种一次一变的要排除。
+   */
+  function identityDataAttrs(el) {
+    const out = [];
+    for (const attr of el.attributes || []) {
+      const name = attr.name;
+      if (!name.startsWith('data-') || STATE_ATTRS.has(name)) continue;
+      if (TEST_ATTRS.includes(name)) continue; // 已按更高优先级单独处理
+      const value = attr.value;
+      if (!value || value.length > 100 || isUnstableId(value)) continue;
+      out.push([name, value]);
+    }
+    return out;
+  }
 
   function escapeAttrValue(value) {
     return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
@@ -100,7 +155,14 @@
   // 路径每短一层，扛住改版的概率就高一截。
   const LANDMARK_TAGS = ['nav', 'main', 'header', 'footer', 'aside', 'form', 'table'];
 
-  /** 该元素自身有没有一个「不依赖祖先」就唯一的锚点选择器 */
+  /**
+   * 该元素自身有没有一个「不依赖祖先」就唯一的锚点选择器。
+   *
+   * 锚点决定结构路径从哪起算，是路径长度的唯一杠杆 —— 只认测试属性 / id / 地标标签
+   * 会白白错过站点自己的稳定标记：Instagram 的 `[data-pagelet="IGDComposerForCannes"]`
+   * 就在录到的祖先链里，用上它能把 12 层裸 div 砍成 3 层。
+   * 判据统一是「值稳定 + 在文档里唯一」，不是属性名在不在某张小名单上。
+   */
   function selfAnchor(el, root) {
     for (const attr of TEST_ATTRS) {
       const v = el.getAttribute(attr);
@@ -108,6 +170,17 @@
         const css = `[${attr}="${escapeAttrValue(v)}"]`;
         if (isUniqueIn(root, css, el)) return css;
       }
+    }
+    for (const [attr, v] of identityDataAttrs(el)) {
+      const css = `[${attr}="${escapeAttrValue(v)}"]`;
+      if (isUniqueIn(root, css, el)) return css;
+    }
+    for (const attr of SEMANTIC_ATTRS) {
+      if (attr === 'role' || attr === 'type' || attr === 'contenteditable') continue; // 太泛，单独用不足以当锚
+      const v = el.getAttribute(attr);
+      if (!v || v.length > 100) continue;
+      const css = `[${attr}="${escapeAttrValue(v)}"]`;
+      if (isUniqueIn(root, css, el)) return css;
     }
     if (!isUnstableId(el.id)) {
       const css = `#${escapeIdent(el.id)}`;
@@ -203,17 +276,35 @@
       push('aria', `[role="${escapeAttrValue(role)}"][aria-label="${escapeAttrValue(ariaLabel)}"]`, 78);
     }
 
-    // 5. 其余语义属性（含组合，单个不唯一时组合往往就唯一了）
+    // 5. 站点自定义标记 —— `data-pagelet` 这类是给自家代码用的，不随视觉改版而变
+    for (const [attr, v] of identityDataAttrs(el)) {
+      push('dataAttr', `[${attr}="${escapeAttrValue(v)}"]`, 70);
+    }
+
+    // 6. 其余语义属性。`role` 单独用太泛（一个页面几十个 role="button"），只参与组合
+    const singles = [];
     for (const attr of SEMANTIC_ATTRS) {
-      if (attr === 'name' || attr === 'aria-label' || attr === 'role') continue;
+      if (attr === 'name' || attr === 'aria-label') continue;
       const v = el.getAttribute(attr);
       if (!v || v.length > 100) continue;
-      push('attr', `${tag}[${attr}="${escapeAttrValue(v)}"]`, attr === 'placeholder' ? 74 : 66);
+      const clause = `[${attr}="${escapeAttrValue(v)}"]`;
+      singles.push(clause);
+      if (attr === 'role') continue;
+      push('attr', `${tag}${clause}`, attr === 'placeholder' || attr === 'aria-placeholder' ? 74 : 66);
     }
 
     const typeAttr = el.getAttribute('type');
     if (typeAttr && name) {
       push('attr', `${tag}[type="${escapeAttrValue(typeAttr)}"][name="${escapeAttrValue(name)}"]`, 76);
+    }
+
+    // 7. 属性两两组合 —— 单个都不唯一时，组合往往就唯一了。
+    // 自绘编辑器正是这种形态：`[role="textbox"]` 和 `[contenteditable="true"]` 各自满页都是，
+    // 合起来就只剩它一个。
+    for (let i = 0; i < singles.length; i += 1) {
+      for (let j = i + 1; j < singles.length; j += 1) {
+        push('attrPair', `${tag}${singles[i]}${singles[j]}`, 62);
+      }
     }
 
     // 6. 结构路径 —— 保底候选。nth-of-type 更抗兄弟增删，优先；它不唯一时才退到 nth-child。
@@ -422,15 +513,35 @@
    */
   const HINT_SCORE = 55;
 
-  function tryCandidates(root, candidates) {
+  /**
+   * 这个元素像不像录制时那一个。
+   *
+   * 只对弱候选（结构路径）启用：深层路径很容易命中**同构的另一条链**，
+   * 而「找到了但找错了」比「没找到」更糟 —— 它不会报错，只会静默地点错地方。
+   * 判据取录制时就固定下来的身份特征（标签、aria-label），不取会变的内容文本。
+   */
+  function looksLikeTarget(el, target) {
+    if (target.tag && tagOf(el) !== target.tag) return false;
+    const hints = target.hints || {};
+    if (hints.ariaLabel && (el.getAttribute('aria-label') || '') !== hints.ariaLabel) return false;
+    if (hints.placeholder && (el.getAttribute('placeholder') || '') !== hints.placeholder) return false;
+    return true;
+  }
+
+  function tryCandidates(root, candidates, target, verify = false) {
     for (const candidate of candidates) {
-      let el;
+      let matches;
       try {
-        el = root.querySelector(candidate.value);
+        matches = root.querySelectorAll(candidate.value);
       } catch {
         continue;
       }
-      if (el) return { element: el, via: candidate };
+      if (!matches.length) continue;
+      if (!verify) return { element: matches[0], via: candidate };
+      // 逐个看，第一个不像不代表都不像：非唯一路径命中多个时，对的那个可能排在后面
+      for (const el of matches) {
+        if (looksLikeTarget(el, target)) return { element: el, via: candidate };
+      }
     }
     return null;
   }
@@ -442,7 +553,7 @@
 
     const candidates = target.candidates || [];
 
-    // 语义类候选（测试属性 / id / name / aria）优先
+    // 语义类候选（测试属性 / id / name / aria）优先：选择器本身已经编码了身份，不必再校验
     const strong = tryCandidates(root, candidates.filter((c) => c.score >= HINT_SCORE));
     if (strong) return strong;
 
@@ -453,7 +564,13 @@
       return { element: byHint, via: { kind: 'hint', value: JSON.stringify(target.hints), score: HINT_SCORE } };
     }
 
-    return tryCandidates(root, candidates.filter((c) => c.score < HINT_SCORE)) || { element: null, via: null };
+    const weak = candidates.filter((c) => c.score < HINT_SCORE);
+    // 结构路径必须过一遍「像不像」，实在没有像的再退回不校验的第一个匹配 ——
+    // 校验只是排序偏好，不该把「有点东西」变成「什么都没有」
+    return (
+      tryCandidates(root, weak, target, true) ||
+      tryCandidates(root, weak, target) || { element: null, via: null }
+    );
   }
 
   window.__BR_SELECTOR__ = { describe, resolve, buildCandidates, isUnstableId, buildAncestors };

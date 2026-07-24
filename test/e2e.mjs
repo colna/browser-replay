@@ -540,16 +540,38 @@ async function main() {
       igFailed.length === 0,
       igFailed.map((f) => `#${f.index} ${f.type}: ${f.error}`).join('; ')
     );
-    // 编辑区没有任何稳定标识，Enter 必须靠「当前焦点元素」才能打对地方
-    const viaActive = igReplayLog.filter((entry) => entry.via && entry.via.kind === 'activeElement');
-    check(
-      '按键步骤退到了当前焦点元素',
-      viaActive.length > 0,
-      igReplayLog.map((e) => `${e.type}:${e.via ? e.via.kind : '-'}`).join(' ')
-    );
-
     const igReplayed = await evaluate(cdp, sessionId, 'window.__harness.igLog()');
     check('回放发出的消息与录制时一致（不是空消息）', igReplayed === igRecorded, `${igReplayed}  (录制时: ${igRecorded})`);
+
+    // 编辑区身上只有 aria-placeholder / role / contenteditable 这类属性，
+    // 它们进白名单前只能退到结构路径 —— 现在应当直接命中语义候选
+    const igEditorStep = igSteps.find((s) => s.type === 'input');
+    const igEditorBest = igEditorStep && igEditorStep.target.candidates[0];
+    check(
+      '自绘编辑区拿到了语义候选而非结构路径',
+      igEditorBest && igEditorBest.score >= 55,
+      igEditorBest ? `${igEditorBest.kind} · ${igEditorBest.score} · ${igEditorBest.value}` : '(无候选)'
+    );
+
+    // 兜底本身也要守住：目标一个候选都不剩时，按键仍应打到当前焦点元素上
+    await evaluate(cdp, sessionId, 'window.__harness.resetIg()');
+    const blindKey = {
+      type: 'key',
+      key: 'Enter',
+      code: 'Enter',
+      timeoutMs: 600,
+      target: { candidates: [], hints: {}, shadowPath: [], tag: 'div' }
+    };
+    const blindSteps = [igSteps.find((s) => s.type === 'focus'), igEditorStep, blindKey].filter(Boolean);
+    const blindLog = await evaluate(cdp, sessionId, `window.__harness.replay(${JSON.stringify(blindSteps)})`);
+    const blindVia = blindLog[blindLog.length - 1].via;
+    check(
+      '零候选的按键步骤退到了当前焦点元素',
+      blindVia && blindVia.kind === 'activeElement',
+      blindLog.map((e) => `${e.type}:${e.via ? e.via.kind : '-'}`).join(' ')
+    );
+    const blindSent = await evaluate(cdp, sessionId, 'window.__harness.igLog()');
+    check('零候选兜底后消息照样发得出去', blindSent === 'hello', blindSent);
 
     log('\n回放明细：');
     for (const entry of replayLog) {

@@ -101,7 +101,7 @@
     recordedValues.set(el, value);
     emit({
       type: 'input',
-      target: target || SELECTOR.describe(el),
+      target: target || describeTarget(el),
       value: masked ? '' : value,
       masked,
       sinceLastMs: sinceLast()
@@ -157,7 +157,7 @@
     if (pendingInput && pendingInput.element !== el) flushPendingInput();
 
     // 选择器在这里就算好：等到结算时元素可能已被编辑器重建，届时描述的就不是同一个节点了
-    if (!pendingInput) pendingInput = { element: el, target: SELECTOR.describe(el) };
+    if (!pendingInput) pendingInput = { element: el, target: describeTarget(el) };
   }
 
   function onInput(event) {
@@ -212,7 +212,11 @@
     '[role="option"]',
     '[role="checkbox"]',
     '[role="radio"]',
-    '[role="switch"]'
+    '[role="switch"]',
+    // 自绘编辑器的编辑区同样是可交互元素，而且它是整棵子树里唯一带标识的那层
+    '[role="textbox"]',
+    '[contenteditable="true"]',
+    '[contenteditable=""]'
   ].join(',');
 
   /**
@@ -225,14 +229,18 @@
    * 才向上找最近的可交互祖先，且**必须确实更好认**才换 —— 这是择优，不是无脑上溯。
    * 只上溯到可交互元素（按钮 / 链接 / role=button）而不是布局容器，
    * 因为回放点击取的是元素中心点，容器太大时中心可能落在别的子元素上。
+   *
+   * 聚焦 / 输入 / 按键的目标同样是最深节点，同样吃这个亏 —— 一并走这条择优逻辑，
+   * 只是它们先归一到编辑宿主（自绘编辑器会重建内部节点，深层节点留不住）。
    */
-  function describeClickTarget(el) {
-    const direct = SELECTOR.describe(el);
+  function describeTarget(el) {
+    const node = editingHostOf(el);
+    const direct = SELECTOR.describe(node);
     const directScore = direct.candidates[0] ? direct.candidates[0].score : 0;
     if (directScore >= 60) return direct;
 
-    const interactive = el.closest && el.closest(INTERACTIVE_SELECTOR);
-    if (!interactive || interactive === el) return direct;
+    const interactive = node.closest && node.closest(INTERACTIVE_SELECTOR);
+    if (!interactive || interactive === node) return direct;
 
     const alt = SELECTOR.describe(interactive);
     const altScore = alt.candidates[0] ? alt.candidates[0].score : 0;
@@ -246,7 +254,7 @@
     if (el.type === 'checkbox' || el.type === 'radio') return;
 
     flushPendingInput();
-    emit({ type: 'click', target: describeClickTarget(el), sinceLastMs: sinceLast() });
+    emit({ type: 'click', target: describeTarget(el), sinceLastMs: sinceLast() });
   }
 
   /**
@@ -274,7 +282,7 @@
     recordedValues.set(el, readValue(el));
     // 逐键元素：以聚焦时的值与光标作为影子缓冲基线
     if (isPerKeyTarget(el)) keyBuffer.set(el, KB.snapshot(el));
-    emit({ type: 'focus', target: SELECTOR.describe(el), sinceLastMs: sinceLast() });
+    emit({ type: 'focus', target: describeTarget(el), sinceLastMs: sinceLast() });
   }
 
   function onFocusOut(event) {
@@ -291,7 +299,7 @@
       // 但内容确实变了 —— 不补这一步，回放出来就是个空框
       emitInputFor(el);
     }
-    emit({ type: 'blur', target: SELECTOR.describe(el), sinceLastMs: sinceLast() });
+    emit({ type: 'blur', target: describeTarget(el), sinceLastMs: sinceLast() });
   }
 
   /** contenteditable 上会改动内容、因而需要标记待结算的非字符键 */
@@ -320,7 +328,7 @@
     ensureKeyBuffer(el);
     const step = {
       type: 'keystroke',
-      target: SELECTOR.describe(el),
+      target: describeTarget(el),
       key,
       code: event.code,
       shiftKey: event.shiftKey,
@@ -358,7 +366,7 @@
 
     emit({
       type: 'key',
-      target: SELECTOR.describe(el),
+      target: describeTarget(el),
       key: event.key,
       code: event.code,
       ctrlKey: event.ctrlKey,
@@ -385,7 +393,7 @@
     const text = event.data || '';
     if (!text) return;
     ensureKeyBuffer(el);
-    const step = { type: 'keystroke', target: SELECTOR.describe(el), text, ime: true, sinceLastMs: sinceLast() };
+    const step = { type: 'keystroke', target: describeTarget(el), text, ime: true, sinceLastMs: sinceLast() };
     keyBuffer.set(el, KB.applyKeystroke(keyBuffer.get(el), step));
     emit(step);
   }
