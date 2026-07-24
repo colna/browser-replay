@@ -638,6 +638,28 @@ async function main() {
     const micLog = await evaluate(cdp, sessionId, 'window.__harness.igLog()');
     check('没有误触发录音', micLog !== '录音中', micLog);
 
+    // ---------- 旧 content script 必须能被新版本顶掉 ----------
+    // 扩展重新加载后，已打开的标签页里还留着旧实例。哨兵若是布尔量，覆盖注入进来的新代码
+    // 会一行都不跑就 return —— 页面永远停在旧版本，而且从外部完全看不出来：
+    // 改了代码、重载了扩展、现象纹丝不动，只会让人以为修错了地方。
+    log('\n── content script 版本接管 ──');
+    const takeover = await evaluate(
+      cdp,
+      sessionId,
+      `(async () => {
+        window.__BR_CONTENT__ = 'stale-0.0.1';
+        await new Promise((resolve, reject) => {
+          const s = document.createElement('script');
+          s.src = '/src/content.js?reinject=1';
+          s.onload = resolve;
+          s.onerror = reject;
+          document.body.appendChild(s);
+        });
+        return window.__BR_CONTENT__;
+      })()`
+    );
+    check('旧版本的 content script 会被新注入顶掉', takeover !== 'stale-0.0.1', `注入后哨兵 = ${takeover}`);
+
     log('\n回放明细：');
     for (const entry of replayLog) {
       const via = entry.via ? `${entry.via.kind}: ${entry.via.value}` : entry.error || '';

@@ -5,8 +5,24 @@
  * 谁把游标存在这里，谁就会在跳转后错乱。游标只属于 background。
  */
 (() => {
-  if (window.__BR_CONTENT__) return;
-  window.__BR_CONTENT__ = true;
+  const VERSION = (() => {
+    try {
+      return chrome.runtime.getManifest().version;
+    } catch {
+      return '0'; // 测试 harness 里没有真的 chrome API
+    }
+  })();
+
+  /**
+   * 用版本号当哨兵，不用布尔量。
+   *
+   * 扩展重新加载后，老实例仍留在已打开的页面里（它的 chrome 上下文已经失效，但
+   * `window` 上的标记还在）。哨兵若是布尔量，覆盖注入进来的新代码会**一行都不跑就 return**，
+   * 页面就此永远停在旧版本 —— 而且从外部完全看不出来：改了代码、重载了扩展、
+   * 现象却纹丝不动，只会让人以为修的地方不对。
+   */
+  if (window.__BR_CONTENT__ === VERSION) return;
+  window.__BR_CONTENT__ = VERSION;
 
   const SELECTOR = window.__BR_SELECTOR__;
   const WAITER = window.__BR_WAITER__;
@@ -689,7 +705,8 @@
         return false;
 
       case 'BR_PING':
-        sendResponse({ ok: true, top: isTopFrame });
+        // 带上版本：background 据此判断页面里跑的是不是当前这版代码
+        sendResponse({ ok: true, top: isTopFrame, version: VERSION });
         return false;
 
       default:

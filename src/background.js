@@ -76,23 +76,37 @@ async function patchPlayState(patch) {
 
 // ---------------------------------------------------------------- 注入
 
+/**
+ * 确保页面里跑着**当前这一版** content script，返回它的版本号（失败返回 null）。
+ *
+ * 光判断「有没有」是不够的：扩展重新加载后，已打开的标签页里还留着旧版本的实例，
+ * 它照样应答 ping。不比版本就会一直用旧代码录制，改了什么都看不出效果。
+ */
 async function ensureInjected(tabId) {
-  try {
-    const pong = await chrome.tabs.sendMessage(tabId, { type: 'BR_PING' });
-    if (pong && pong.ok) return true;
-  } catch {
-    /* 插件安装前就打开的标签页没有 content script，下面补注入 */
-  }
+  const wanted = chrome.runtime.getManifest().version;
+
+  const ping = async () => {
+    try {
+      const pong = await chrome.tabs.sendMessage(tabId, { type: 'BR_PING' });
+      return pong && pong.ok ? pong.version || '0' : null;
+    } catch {
+      return null; // 插件安装前就打开的标签页没有 content script
+    }
+  };
+
+  const current = await ping();
+  if (current === wanted) return current;
+
   try {
     await chrome.scripting.executeScript({
       target: { tabId, allFrames: true },
       files: CONTENT_FILES
     });
-    return true;
   } catch (error) {
     console.warn('[browser-replay] 注入失败', error);
-    return false;
+    return current;
   }
+  return (await ping()) || current;
 }
 
 async function broadcast(tabId, message) {
@@ -119,9 +133,11 @@ async function startRecording(tabId, name) {
     startUrl: tab.url,
     steps: [{ type: 'navigate', url: tab.url, at: Date.now(), sinceLastMs: 0 }]
   };
+  // 先注入再存：录制用的是哪一版 content script，必须随脚本一起留痕。
+  // 只记 manifest 版本是不够的 —— 那是导出那一刻读的，证明不了当时页面里跑的是哪一版。
+  script.contentVersion = await ensureInjected(tabId);
   await saveScript(script);
   await setRecState({ recording: true, tabId, scriptId: script.id });
-  await ensureInjected(tabId);
   await broadcast(tabId, { type: 'BR_START_RECORD' });
   await updateBadge();
   return script;

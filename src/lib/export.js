@@ -6,8 +6,11 @@
 export function toExport(script, extVersion) {
   return {
     format: 'browser-replay@1',
-    // 录制是哪个版本产出的 —— 排查线上录制时，第一件事就是确认页面里跑的到底是不是新代码
+    // 导出这一刻的扩展版本
     extVersion,
+    // 录制当时页面里那个 content script 的版本 —— 排查线上录制时先看它。
+    // 两者可能不一致：扩展重新加载了，已打开的标签页里却还跑着旧代码。
+    contentVersion: script.contentVersion,
     id: script.id,
     name: script.name,
     startUrl: script.startUrl,
